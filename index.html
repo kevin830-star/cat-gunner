@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>猫咪保卫战</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<canvas id="game"></canvas>
+
+<button id="btnPause" class="hudbtn" aria-label="暂停">⏸</button>
+<div id="touchBtns">
+  <button id="btnWeapon">换枪</button>
+  <button id="btnCatnip">猫薄荷</button>
+</div>
+
+<!-- 主菜单 -->
+<div id="menu" class="overlay show">
+  <div class="panel center">
+    <h1>猫咪保卫战</h1>
+    <p class="sub">保卫猫窝，顺便学中文！</p>
+    <div class="howto">
+      <p><b>电脑</b>：WASD 移动 · 鼠标瞄准并按住射击 · Q 换枪 · 空格 猫薄荷 · P 暂停</p>
+      <p><b>手机</b>：左侧拖动移动 · 自动瞄准射击</p>
+      <p>每关 60 秒。每 3 关有头目，答对填空题可增强攻击力。<br>商店里的汉字小游戏可以赚小鱼干。</p>
+    </div>
+    <button class="big" data-action="start">开始游戏</button>
+    <div class="toggles">
+      <button data-action="togglePinyin" class="tgl" id="tglPinyin1"></button>
+      <button data-action="toggleMute" class="tgl" id="tglMute1"></button>
+    </div>
+    <p class="best" id="bestText"></p>
+  </div>
+</div>
+
+<!-- 暂停 -->
+<div id="pause" class="overlay">
+  <div class="panel center">
+    <h2>暂停</h2>
+    <button class="big" data-action="resume">继续游戏</button>
+    <div class="toggles">
+      <button data-action="togglePinyin" class="tgl" id="tglPinyin2"></button>
+      <button data-action="toggleMute" class="tgl" id="tglMute2"></button>
+    </div>
+    <button class="plain" data-action="toMenu">回到主菜单</button>
+  </div>
+</div>
+
+<!-- 头目填空题 -->
+<div id="quiz" class="overlay">
+  <div class="panel center" id="quizBody"></div>
+</div>
+
+<!-- 商店 -->
+<div id="shop" class="overlay">
+  <div class="panel wide" id="shopBody"></div>
+</div>
+
+<!-- 汉字小游戏 -->
+<div id="mini" class="overlay">
+  <div class="panel center" id="miniBody"></div>
+</div>
+
+<!-- 游戏结束 -->
+<div id="over" class="overlay">
+  <div class="panel center" id="overBody"></div>
+</div>
+
+<script src="data.js"></script>
+<script src="game.js"></script>
+</body>
+</html>
