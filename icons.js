@@ -29,23 +29,24 @@ const ICONS = (() => {
 
   const draw = {
     // 豌豆手枪：枪身上嵌着一只豌豆荚
-    pistol() {
-      c.translate(32, 32); c.rotate(-0.12); c.translate(-32, -32);
+    pistol(held) {
+      if (!held) { c.translate(32, 32); c.rotate(-0.12); c.translate(-32, -32); }
       poly([19, 30, 32, 30, 29, 53, 15, 53], WOOD);
       c.beginPath(); c.arc(36, 36, 6, 0.1, Math.PI * 0.9); c.stroke();
       rr(10, 20, 40, 14, 5, METAL);
       rr(48, 22, 7, 10, 2, DARK);
       rr(15, 12, 28, 11, 5.5, '#6fd24a');
       for (const x of [22, 29, 36]) circ(x, 17.5, 3, '#a4ec7a', false);
-      circ(59, 25, 3.5, '#6fd24a');
+      if (!held) circ(59, 25, 3.5, '#6fd24a');
     },
     // 毛线散弹枪：双管，旁边一团毛线
-    shotgun() {
+    shotgun(held) {
       poly([4, 30, 22, 24, 22, 40, 7, 47], WOOD);
       rr(20, 22, 38, 8, 3, METAL);
       rr(20, 30, 38, 8, 3, METAL);
       rr(31, 38, 15, 7, 3, WOOD);
       circ(57, 26, 1.6, OUT, false); circ(57, 34, 1.6, OUT, false);
+      if (held) return;
       c.beginPath(); c.moveTo(38, 50); c.quadraticCurveTo(28, 60, 18, 54); c.strokeStyle = OUT; c.lineWidth = 4; c.stroke();
       c.strokeStyle = '#ff8fb1'; c.lineWidth = 2; c.stroke(); c.strokeStyle = OUT; c.lineWidth = 3;
       circ(46, 50, 10, '#ff8fb1');
@@ -56,7 +57,7 @@ const ICONS = (() => {
       c.restore();
     },
     // 鱼骨冲锋枪：枪身上有鱼骨图案
-    smg() {
+    smg(held) {
       line([15, 26, 5, 26, 5, 38], OUT, 4);
       poly([15, 36, 25, 36, 22, 52, 12, 52], WOOD);
       rr(28, 36, 9, 18, 2, DARK);
@@ -69,11 +70,12 @@ const ICONS = (() => {
       line([19, 28, 16, 24], '#fff', 2); line([19, 28, 16, 32], '#fff', 2);
     },
     // 罐头榴弹炮：粗炮管，配一个鱼罐头
-    grenade() {
+    grenade(held) {
       poly([20, 34, 31, 34, 28, 50, 16, 50], WOOD);
       rr(8, 16, 42, 20, 9, METAL);
       rr(46, 12, 9, 28, 4, DARK);
       rr(14, 12, 12, 6, 2, DARK);
+      if (held) return;
       // 罐头
       rr(38, 42, 20, 18, 3, '#d8dde3');
       c.save(); c.lineWidth = 0; c.fillStyle = '#e8743b'; c.fillRect(39.5, 47, 17, 8); c.restore();
@@ -81,14 +83,16 @@ const ICONS = (() => {
       poly([51, 51, 54.5, 48.5, 54.5, 53.5], '#fff'); c.restore();
     },
     // 激光逗猫笔：一支笔射出红色激光
-    laser() {
+    laser(held) {
+      if (!held) {
       line([34, 30, 57, 12], '#ffb0b0', 6);
       line([34, 30, 57, 12], '#ff4040', 2.5);
       c.save(); c.strokeStyle = '#ff4040'; c.lineWidth = 2;
       for (let i = 0; i < 6; i++) { const a = i * TAU / 6; c.beginPath(); c.moveTo(57 + Math.cos(a) * 3, 12 + Math.sin(a) * 3); c.lineTo(57 + Math.cos(a) * 6.5, 12 + Math.sin(a) * 6.5); c.stroke(); }
       c.restore();
       circ(57, 12, 2.5, '#ff4040', false);
-      c.translate(22, 40); c.rotate(-0.66);
+      }
+      if (held) c.translate(22, 32); else { c.translate(22, 40); c.rotate(-0.66); }
       rr(-18, -5.5, 32, 11, 5.5, '#465264');
       rr(12, -4, 7, 8, 2, '#c9ced6');
       rr(-18, -5.5, 8, 11, 4, '#2bb5a0');
@@ -169,15 +173,19 @@ const ICONS = (() => {
     },
   };
 
-  const canvas = {}, url = {};
-  for (const id in draw) {
+  const render = (id, held) => {
     const cv = document.createElement('canvas');
     cv.width = cv.height = 128;
     c = cv.getContext('2d');
     c.scale(2, 2);
     c.lineWidth = 3; c.strokeStyle = OUT; c.lineJoin = 'round'; c.lineCap = 'round';
-    draw[id]();
-    canvas[id] = cv; url[id] = cv.toDataURL();
-  }
-  return { canvas, url };
+    draw[id](held);
+    return cv;
+  };
+  // canvas/url：完整图标；held：猫咪手里拿的版本；grip：握把位置（64×64 坐标）
+  const canvas = {}, url = {}, held = {};
+  const grip = { pistol: [24, 38], shotgun: [22, 36], smg: [18, 42], grenade: [24, 40], laser: [20, 32] };
+  for (const id in draw) { canvas[id] = render(id, false); url[id] = canvas[id].toDataURL(); }
+  for (const id in grip) held[id] = render(id, true);
+  return { canvas, url, held, grip };
 })();

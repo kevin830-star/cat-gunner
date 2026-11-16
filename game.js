@@ -165,15 +165,46 @@ function setState(s) {
   $('touchBtns').style.visibility = (s === 'playing') ? 'visible' : 'hidden';
 }
 
+const freshRun = () => ({
+  level: 1, fish: 0, kills: 0,
+  weapons: { pistol: 1 }, cur: 'pistol',
+  items: { catnip: 0, turret: 0, fence: 0, magnet: 0 },
+  stats: { catHp: 0, catSpd: 0, nestHp: 0 },
+  nestHp: 300, miniPlayed: false, lastBonus: 0,
+});
+
+// 进度存档：每次过关进商店、以及在商店里的每次操作后自动保存
+const SAVE_KEY = 'catDefenseRun';
+function saveRun() { try { localStorage.setItem(SAVE_KEY, JSON.stringify(G)); } catch (e) { /* 忽略 */ } }
+function clearRun() { try { localStorage.removeItem(SAVE_KEY); } catch (e) { /* 忽略 */ } }
+function loadRun() {
+  try {
+    const d = JSON.parse(localStorage.getItem(SAVE_KEY));
+    if (!d || !(d.level >= 1) || !d.weapons) return null;
+    const run = freshRun();
+    for (const k of ['level', 'fish', 'kills', 'nestHp', 'lastBonus']) if (Number.isFinite(d[k])) run[k] = d[k];
+    run.miniPlayed = !!d.miniPlayed;
+    for (const w of WEAPONS) if (d.weapons[w.id] >= 1) run.weapons[w.id] = clamp(Math.floor(d.weapons[w.id]), 1, WEAPON_MAX);
+    for (const it of ITEMS) if (d.items && d.items[it.id] >= 0) run.items[it.id] = clamp(Math.floor(d.items[it.id]), 0, it.max);
+    for (const st of STATS) if (d.stats && d.stats[st.id] >= 0) run.stats[st.id] = clamp(Math.floor(d.stats[st.id]), 0, st.max);
+    if (run.weapons[d.cur]) run.cur = d.cur;
+    return run;
+  } catch (e) { return null; }
+}
+
 function newGame() {
-  G = {
-    level: 1, fish: 0, kills: 0,
-    weapons: { pistol: 1 }, cur: 'pistol',
-    items: { catnip: 0, turret: 0, fence: 0, magnet: 0 },
-    stats: { catHp: 0, catSpd: 0, nestHp: 0 },
-    nestHp: 300, miniPlayed: false, lastBonus: 0,
-  };
+  clearRun();
+  G = freshRun();
   startLevel();
+}
+function continueGame() {
+  const run = loadRun();
+  if (!run) return newGame();
+  G = run; L = null;
+  setState('shop');
+  renderShop();
+  $('shopBody').scrollTop = 0;
+  show('shop');
 }
 
 function startLevel() {
@@ -459,6 +490,7 @@ function levelClear() {
   G.lastBonus = 10 + 5 * G.level;
   G.fish += G.lastBonus;
   G.miniPlayed = false;
+  saveRun();
   if (G.level > store.best) { store.best = G.level; save(); }
   sfx.right();
   setState('shop');
@@ -470,6 +502,7 @@ function levelClear() {
 function gameOver(reason) {
   const cleared = G.level - 1;
   if (cleared > store.best) { store.best = cleared; save(); }
+  clearRun();
   sfx.wrong();
   setState('over');
   $('overBody').innerHTML = `
@@ -558,6 +591,7 @@ function makeMiniQuestion(type) {
 function openMini() {
   if (G.miniPlayed) return;
   G.miniPlayed = true;
+  saveRun();
   const type = miniType();
   mini = { type, i: 0, right: 0, total: 3, q: makeMiniQuestion(type.id), chosen: -1 };
   setState('mini');
@@ -596,6 +630,7 @@ function nextMini() {
   const perfect = m.right === m.total;
   const reward = m.right * miniReward() + (perfect ? 15 : 0);
   G.fish += reward;
+  saveRun();
   if (reward) sfx.buy();
   $('miniBody').innerHTML = `<h2>${perfect ? '全部答对！太棒了！' : '小游戏结束'}</h2>
     <div class="stat">答对 <b>${m.right}</b> / ${m.total} 题${perfect ? '<br>全对奖励 +15 🐟' : ''}<br>一共获得 <b>${reward}</b> 🐟 小鱼干</div>
@@ -647,7 +682,8 @@ function renderShop() {
     lv: `猫窝生命 ${Math.ceil(G.nestHp)}/${nestMaxHp()}`,
     btns: btn('repair', '', hurt ? `修补 ${REPAIR_COST} 🐟` : '不需要修补', hurt && fish >= REPAIR_COST) });
   const nextBoss = isBossLevel(G.level + 1);
-  h += `</div><div class="shopfoot"><button class="big" data-action="next">开始第 ${G.level + 1} 关${nextBoss ? '（头目关！）' : ''}</button></div>`;
+  h += `</div><div class="shopfoot"><button class="big" data-action="next">开始第 ${G.level + 1} 关${nextBoss ? '（头目关！）' : ''}</button><br>
+    <button class="plain" data-action="toMenu">回到主菜单（进度已自动保存）</button></div>`;
   const body = $('shopBody'), st = body.scrollTop;
   body.innerHTML = h;
   body.scrollTop = st;
@@ -664,6 +700,7 @@ function shopAction(action, id) {
     if (lv < s.max && pay(statCost(lv))) { G.stats[id]++; if (id === 'nestHp') G.nestHp += 100; }
   }
   else if (action === 'repair') { if (G.nestHp < nestMaxHp() && pay(REPAIR_COST)) G.nestHp = Math.min(nestMaxHp(), G.nestHp + REPAIR_HP); }
+  saveRun();
   renderShop();
 }
 
@@ -674,6 +711,11 @@ function refreshToggles() {
     $('tglMute' + n).textContent = '声音：' + (store.mute ? '关' : '开');
   }
   $('bestText').textContent = store.best ? `最高纪录：通过 ${store.best} 关` : '';
+  const run = loadRun();
+  $('btnContinue').style.display = run ? '' : 'none';
+  if (run) $('btnContinue').textContent = `继续游戏（从第 ${run.level + 1} 关开始）`;
+  $('btnStart').textContent = run ? '开始新游戏' : '开始游戏';
+  $('btnStart').className = run ? 'tgl' : 'big';
 }
 document.addEventListener('click', e => {
   const b = e.target.closest('[data-action]');
@@ -681,7 +723,10 @@ document.addEventListener('click', e => {
   initAudio();
   const a = b.dataset.action, id = b.dataset.id;
   switch (a) {
-    case 'start': newGame(); break;
+    case 'start':
+      if (state === 'menu' && loadRun() && !confirm('开始新游戏会覆盖已保存的进度，确定吗？')) break;
+      newGame(); break;
+    case 'continue': continueGame(); break;
     case 'resume': resumeGame(); break;
     case 'toMenu': G = null; L = null; setState('menu'); refreshToggles(); show('menu'); break;
     case 'togglePinyin': store.pinyin = !store.pinyin; save(); refreshToggles(); break;
@@ -823,15 +868,11 @@ function drawCat(c) {
   ctx.fillStyle = '#ff8fa3'; ctx.beginPath(); ctx.moveTo(2, -9.5); ctx.lineTo(6, -9.5); ctx.lineTo(4, -7.5); ctx.closePath(); ctx.fill();
   ctx.strokeStyle = OUT; ctx.lineWidth = 1.2; ctx.beginPath(); ctx.moveTo(4, -7.5); ctx.quadraticCurveTo(2, -4.5, 0.5, -6.5); ctx.moveTo(4, -7.5); ctx.quadraticCurveTo(6, -4.5, 7.5, -6.5); ctx.stroke();
   ctx.restore();
-  // 枪
-  const w = weaponDef(G.cur);
+  // 枪：和商店图标是同一张图
+  const [gx, gy] = ICONS.grip[G.cur], gs = 0.62;
   ctx.save(); ctx.translate(c.x, c.y + 4 + bob); ctx.rotate(c.aim); ctx.scale(1, face);
+  ctx.drawImage(ICONS.held[G.cur], 11 - gx * gs, 1 - gy * gs, 64 * gs, 64 * gs);
   ctx.lineWidth = 2; ctx.strokeStyle = OUT;
-  const len = { pistol: 16, shotgun: 22, smg: 20, grenade: 22, laser: 24 }[w.id];
-  const th = { pistol: 6, shotgun: 8, smg: 6, grenade: 11, laser: 4 }[w.id];
-  ctx.fillStyle = '#6b7686'; ctx.fillRect(8, -th / 2, len, th); ctx.strokeRect(8, -th / 2, len, th);
-  ctx.fillStyle = w.color; ctx.fillRect(8 + len - 5, -th / 2, 5, th); ctx.strokeRect(8 + len - 5, -th / 2, 5, th);
-  ctx.fillStyle = '#8a5a3a'; ctx.fillRect(8, 0, 6, 7); ctx.strokeRect(8, 0, 6, 7);
   ell(11, 3, 4.5, 4, '#fff', OUT);   // 小爪子
   ctx.restore();
   ctx.globalAlpha = 1;

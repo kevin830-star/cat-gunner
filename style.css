@@ -102,3 +102,5 @@ button.plain { margin-top: 14px; background: none; border: none; text-decoration
   .qbig { font-size: 60px; }
   .panel { padding: 16px 14px; }
 }
+
+#btnStart.tgl { margin-top: 14px; font-size: 15px; padding: 8px 18px; }
