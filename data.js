@@ -20,6 +20,9 @@ const ITEMS = [
   { id: 'turret', name: '自动炮塔', py: 'zìdòng pàotǎ', desc: '在猫窝旁边自动射击。等级 = 炮塔数量。', cost: 120, max: 4 },
   { id: 'fence', name: '铁丝围栏', py: 'tiěsī wéilán', desc: '靠近猫窝的敌人会变慢。每级减速 15%。', cost: 80, max: 3 },
   { id: 'magnet', name: '磁铁项圈', py: 'cítiě xiàngquān', desc: '从更远的地方吸来小鱼干。', cost: 50, max: 3 },
+  { id: 'shuriken', name: '旋转飞镖', py: 'xuánzhuǎn fēibiāo', desc: '绕着猫窝高速旋转，切碎靠近的敌人。等级 = 飞镖数量。', cost: 150, max: 3 },
+  { id: 'lightning', name: '闪电云', py: 'shǎndiàn yún', desc: '猫窝上空的雷云，定时劈中附近的敌人。等级越高劈得越多越快。', cost: 180, max: 3 },
+  { id: 'helper', name: '小猫助手', py: 'xiǎomāo zhùshǒu', desc: '跟着你一起开枪的小猫。等级 = 小猫数量。', cost: 200, max: 2 },
 ];
 
 const STATS = [
@@ -35,11 +38,12 @@ const ENEMIES = {
   raccoon: { name: '浣熊盗贼', hp: 70, spd: 44, r: 19, dmg: 8, fish: [4, 6], target: 'nest', from: 3, w: 2 },
   crow:    { name: '乌鸦投弹手', hp: 32, spd: 85, r: 14, dmg: 8, fish: [3, 4], target: 'cat', ranged: true, from: 4, w: 3 },
   elite:   { name: '铁桶鼠队长', hp: 180, spd: 50, r: 24, dmg: 9, fish: [14, 18], target: 'nest' },
-  boss:    { name: '野狗头目', hp: 520, spd: 34, r: 40, dmg: 14, fish: [40, 50], target: 'nest' },
+  boss:    { name: '头目', hp: 520, spd: 34, r: 40, dmg: 14, fish: [40, 50], target: 'nest' },
 };
 
 // 战斗中随机掉落的增益。ch: 掉落物上显示的汉字；dur: 持续秒数（0 = 立刻生效）
 const BUFFS = [
+  { id: 'giant', ch: '大', name: '变大', py: 'biàn dà', tip: '变成巨猫，踩扁敌人', color: '#f5b300', dur: 6 },
   { id: 'power', ch: '力', name: '力量', py: 'lìliàng', tip: '攻击力加倍', color: '#ff6b5e', dur: 8 },
   { id: 'rapid', ch: '快', name: '快速', py: 'kuàisù', tip: '射击变快', color: '#ffa726', dur: 8 },
   { id: 'shield', ch: '盾', name: '护盾', py: 'hùdùn', tip: '暂时不会受伤', color: '#5aa9ff', dur: 6 },

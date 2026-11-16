@@ -29,31 +29,10 @@ const store = { best: 0, pinyin: true, mute: false };
 try { Object.assign(store, JSON.parse(localStorage.getItem('catDefense') || '{}')); } catch (e) { /* 无存档 */ }
 const save = () => { try { localStorage.setItem('catDefense', JSON.stringify(store)); } catch (e) { /* 忽略 */ } };
 
-// ---------- 声音 ----------
-let ac = null;
-function initAudio() {
-  if (ac) return;
-  try { ac = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { ac = null; }
-}
-function beep(freq, dur, type = 'square', vol = 0.04, slide = 0) {
-  if (!ac || store.mute) return;
-  const o = ac.createOscillator(), g = ac.createGain(), t = ac.currentTime;
-  o.type = type; o.frequency.setValueAtTime(freq, t);
-  if (slide) o.frequency.exponentialRampToValueAtTime(Math.max(30, freq + slide), t + dur);
-  g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-  o.connect(g).connect(ac.destination); o.start(t); o.stop(t + dur);
-}
-const sfx = {
-  shoot: () => beep(520, 0.07, 'square', 0.025, -250),
-  boom: () => beep(140, 0.3, 'sawtooth', 0.07, -100),
-  hit: () => beep(220, 0.05, 'triangle', 0.04, -80),
-  pickup: () => beep(880, 0.06, 'sine', 0.04, 400),
-  hurt: () => beep(160, 0.18, 'sawtooth', 0.06, -90),
-  buy: () => { beep(660, 0.08, 'sine', 0.05); setTimeout(() => beep(990, 0.12, 'sine', 0.05), 80); },
-  right: () => { beep(523, 0.1, 'sine', 0.06); setTimeout(() => beep(659, 0.1, 'sine', 0.06), 100); setTimeout(() => beep(784, 0.18, 'sine', 0.06), 200); },
-  wrong: () => beep(200, 0.3, 'square', 0.04, -80),
-  boss: () => beep(90, 0.6, 'sawtooth', 0.07, 60),
-};
+// ---------- 声音 ----------（合成器在 sound.js）
+SFX.setMuted(() => store.mute);
+const initAudio = () => SFX.init();
+const sfx = new Proxy({}, { get: (_, name) => () => SFX.play(name) });
 function speak(text) {
   if (store.mute || !window.speechSynthesis) return;
   try {
@@ -168,7 +147,7 @@ function setState(s) {
 const freshRun = () => ({
   level: 1, fish: 0, kills: 0,
   weapons: { pistol: 1 }, cur: 'pistol',
-  items: { catnip: 0, turret: 0, fence: 0, magnet: 0 },
+  items: Object.fromEntries(ITEMS.map(it => [it.id, 0])),
   stats: { catHp: 0, catSpd: 0, nestHp: 0 },
   nestHp: 300, miniPlayed: false, lastBonus: 0,
 });
@@ -217,18 +196,20 @@ function eliteSchedule(lv) {
 function startLevel() {
   L = {
     time: LEVEL_TIME, elapsed: 0, spawnT: 1.2,
-    cat: { x: NEST.x, y: NEST.y + 95, r: 17, hp: catMaxHp(), cd: 0, inv: 0, aim: 0, walk: 0, moving: false },
+    cat: { x: NEST.x, y: NEST.y + 95, r: 17, hp: catMaxHp(), cd: 0, inv: 0, aim: 0, walk: 0, moving: false, kx: 0, ky: 0, s: 1 },
     enemies: [], bullets: [], ebullets: [], fish: [], parts: [], texts: [], turrets: [],
     atkBuff: 0, catnipLeft: G.items.catnip, catnipT: 0,
     boss: null, bossSpawned: false, bossHalfAsked: false, isBoss: isBossLevel(G.level),
     shake: 0, banner: 2.2, nestFlash: 0,
-    drops: [], buffT: { power: 0, rapid: 0, shield: 0, freeze: 0 },
+    drops: [], buffT: Object.fromEntries(BUFFS.filter(b => b.dur).map(b => [b.id, 0])),
+    rings: [], bolts: [], helpers: [], trail: [], shAngle: 0, stormCd: 2, morphT: 0, stompT: 0, trailT: 0, form: null,
     eliteTimes: eliteSchedule(G.level), notice: null, clearT: 0, fireworkT: 0,
   };
   for (let i = 0; i < G.items.turret; i++) {
     const a = Math.PI / 4 + i * Math.PI / 2;
     L.turrets.push({ x: NEST.x + Math.cos(a) * 82, y: NEST.y + Math.sin(a) * 82, cd: rand(0, 0.5), aim: a });
   }
+  for (let i = 0; i < G.items.helper; i++) L.helpers.push({ x: NEST.x - 30 + i * 60, y: NEST.y + 120, cd: rand(0, 0.5), aim: 0, side: i ? 1 : -1 });
   show(null);
   setState('playing');
 }
@@ -241,12 +222,13 @@ function cycleWeapon(dir) {
   const i = owned.findIndex(w => w.id === G.cur);
   G.cur = owned[(i + dir + owned.length) % owned.length].id;
   addText(L.cat.x, L.cat.y - 34, weaponDef(G.cur).name, '#fff', 15);
+  sfx.switch();
 }
 function useCatnip() {
   if (L.catnipLeft <= 0 || L.catnipT > 0) return;
   L.catnipLeft--; L.catnipT = 6;
   addText(L.cat.x, L.cat.y - 34, '猫薄荷！', '#9cff6b', 18);
-  sfx.buy();
+  sfx.catnip();
 }
 
 // ---------- 效果 ----------
@@ -271,13 +253,117 @@ function spawnEnemy(type, pos) {
     else { x = WORLD.w + 20; y = rand(0, WORLD.h); }
   }
   let hp = d.hp * (1 + 0.12 * (lv - 1));
-  if (type === 'boss') hp = d.hp * (lv / BOSS_EVERY) * (1 + 0.1 * (lv / BOSS_EVERY - 1));
+  const kind = type === 'boss' ? bossFor(lv) : null;
+  if (kind) hp = d.hp * kind.hp * (1 + 0.7 * (lv / BOSS_EVERY - 1));
   const e = {
     type, x, y, r: d.r, hp, maxHp: hp, spd: d.spd * Math.min(1.5, 1 + 0.025 * (lv - 1)) * rand(0.92, 1.08),
     dmg: d.dmg * (1 + 0.08 * (lv - 1)), cd: rand(0.3, 1), cd2: 0, flash: 0, face: 1, t: rand(0, 10), summon: 4, dead: false,
   };
+  if (kind) Object.assign(e, { kind, r: kind.r, spd: kind.spd, st: 'walk', stT: 0, stDur: 1, spCd: 3, atkAnim: 0, z: 0, dir: 0, walking: true });
   L.enemies.push(e);
   return e;
+}
+
+// ---------- 头目行为 ----------
+const bossFor = lv => BOSSES[(Math.max(1, Math.floor(lv / BOSS_EVERY)) - 1) % BOSSES.length];
+const BOSS_WIND = { bark: 0.5, dash: 0.6, howl: 0.8, stomp: 0.9, spit: 0.5, pounce: 0.6, roar: 0.7, charge: 0.9 };
+const BOSS_RANGE = { dash: 520, spit: 560, pounce: 470, charge: 700 };
+function ring(x, y, max, color, life = 0.5) { L.rings.push({ x, y, max, color, life, maxLife: life }); }
+function bossState(e, st, t) { e.st = st; e.stT = t; e.stDur = t || 1; }
+function knockCat(from, power) {
+  const c = L.cat;
+  if (L.buffT.giant > 0) return;
+  const a = Math.atan2(c.y - from.y, c.x - from.x);
+  c.kx = Math.cos(a) * power; c.ky = Math.sin(a) * power;
+}
+function faceDir(e) { e.face = Math.cos(e.dir) < 0 ? -1 : 1; }
+
+function updateBoss(e, dt, c) {
+  const k = e.kind, sp = k.special, dCat = dist(e, c);
+  e.atkAnim = Math.max(0, e.atkAnim - dt);
+  if (e.st === 'walk') {
+    let spd = e.spd * (e.rage > 0 ? 1.3 : 1);
+    if (G.items.fence && dist(e, NEST) < FENCE_R) spd *= 1 - 0.15 * G.items.fence;
+    const dx = NEST.x - e.x, dy = NEST.y - e.y, dd = Math.hypot(dx, dy) || 1, stop = NEST.r + e.r - 6;
+    e.walking = dd > stop;
+    if (e.walking) { e.x += dx / dd * spd * dt; e.y += dy / dd * spd * dt; if (Math.abs(dx) > 2) e.face = dx < 0 ? -1 : 1; }
+    else if (e.cd <= 0) { e.cd = 1.3; e.atkAnim = 0.4; hurtNest(e.dmg); }   // 咬猫窝
+    if (e.cd2 <= 0 && dCat < c.r + e.r - 6) { e.cd2 = 0.8; e.atkAnim = 0.4; hurtCat(e.dmg); }
+    e.spCd -= dt;
+    const inRange = sp === 'stomp' ? (dist(e, NEST) < 250 || dCat < 210) : dCat < (BOSS_RANGE[sp] || 1e9);
+    if (e.spCd <= 0 && inRange) {
+      bossState(e, 'wind', BOSS_WIND[sp]);
+      e.dir = Math.atan2(c.y - e.y, c.x - e.x); e.tx = c.x; e.ty = c.y;
+      if (sp !== 'bark' && sp !== 'howl' && sp !== 'stomp' && sp !== 'roar') faceDir(e);
+      if (sp === 'howl') sfx.howl(); else if (sp === 'stomp') sfx.trumpet(); else if (sp === 'roar') sfx.roar(); else if (sp === 'charge') sfx.boss();
+    }
+    return;
+  }
+  e.walking = false;
+  e.stT -= dt;
+  if (e.st === 'wind') {
+    // 冲撞类攻击在蓄力前半段会继续瞄准猫咪，之后方向锁定，给玩家躲开的时间
+    if ((sp === 'charge' && e.stT > 0.35) || (sp === 'dash' && e.stT > 0.2)) { e.dir = Math.atan2(c.y - e.y, c.x - e.x); faceDir(e); }
+    if (e.stT <= 0) bossAct(e, c);
+  } else if (e.st === 'act') {
+    if (sp === 'dash' || sp === 'charge') {
+      const v = sp === 'dash' ? 560 : 640;
+      e.x += Math.cos(e.dir) * v * dt; e.y += Math.sin(e.dir) * v * dt;
+      if (Math.random() < 0.6) L.parts.push({ x: e.x - Math.cos(e.dir) * e.r, y: e.y + e.r * 0.7, vx: rand(-40, 40), vy: rand(-40, 0), life: 0.4, color: '#e3cf9a', r: rand(3, 6) });
+      if (!e.hitOnce && dCat < c.r + e.r) { e.hitOnce = true; hurtCat(e.dmg * (sp === 'dash' ? 0.9 : 1.2)); knockCat(e, 420); }
+      if (sp === 'charge' && !e.nestOnce && dist(e, NEST) < NEST.r + e.r) { e.nestOnce = true; hurtNest(e.dmg * 1.2); L.shake = 0.3; sfx.stomp(); }
+      const out = e.x < 30 || e.x > WORLD.w - 30 || e.y < 30 || e.y > WORLD.h - 30;
+      if (out) { e.x = clamp(e.x, 30, WORLD.w - 30); e.y = clamp(e.y, 30, WORLD.h - 30); }
+      if (out || e.stT <= 0) bossState(e, 'rest', sp === 'dash' ? 0.4 : 0.7);
+    } else if (sp === 'pounce') {
+      const p = clamp(1 - e.stT / e.stDur, 0, 1);
+      e.x = e.sx + (e.tx - e.sx) * p; e.y = e.sy + (e.ty - e.sy) * p; e.z = Math.sin(Math.PI * p) * 95;
+      if (e.stT <= 0) {
+        e.z = 0; ring(e.x, e.y, 90, '#ffb347'); L.shake = 0.35; sfx.stomp();
+        burst(e.x, e.y + e.r * 0.6, '#e3cf9a', 14, 200);
+        if (dist(e, c) < 85) { hurtCat(e.dmg * 1.1); knockCat(e, 300); }
+        bossState(e, 'rest', 0.5);
+      }
+    }
+  } else if (e.stT <= 0) {
+    e.spCd = k.cd * (e.hp < e.maxHp / 2 ? 0.7 : 1);   // 血量过半后更暴躁
+    bossState(e, 'walk', 0);
+  }
+}
+function bossAct(e, c) {
+  const sp = e.kind.special, lv = G.level, around = () => ({ x: e.x + rand(-70, 70), y: e.y + rand(-70, 70) });
+  e.hitOnce = false; e.nestOnce = false;
+  if (sp === 'bark') {
+    for (let i = 0; i < 2 + Math.floor(lv / 9); i++) spawnEnemy('mouse', around());
+    addText(e.x, e.y - e.r - 34, '汪！汪！', '#fff', 20, 1.1); sfx.bark();
+    bossState(e, 'rest', 0.4);
+  } else if (sp === 'dash') { sfx.dash(); bossState(e, 'act', 0.45); }
+  else if (sp === 'howl') {
+    for (let i = 0; i < 4; i++) spawnEnemy('roach', around());
+    for (const o of L.enemies) o.rage = 4;
+    ring(e.x, e.y, 280, '#cfd8e6', 0.7); ring(e.x, e.y, 200, '#cfd8e6', 0.5);
+    addText(e.x, e.y - e.r - 34, '嗷呜——', '#fff', 20, 1.2);
+    bossState(e, 'rest', 0.5);
+  } else if (sp === 'stomp') {
+    ring(e.x, e.y, 210, '#ffb347', 0.5); ring(e.x, e.y, 140, '#fff', 0.35);
+    L.shake = 0.55; sfx.stomp();
+    if (dist(e, c) < 210) { hurtCat(e.dmg * 1.2); knockCat(e, 380); }
+    if (dist(e, NEST) < 210 + NEST.r) hurtNest(e.dmg);
+    bossState(e, 'rest', 0.5);
+  } else if (sp === 'spit') {
+    const hx = e.x + e.face * e.r * 0.7, hy = e.y - e.r * 2.1, a0 = Math.atan2(c.y - hy, c.x - hx);
+    for (let i = -2; i <= 2; i++) L.ebullets.push({ x: hx, y: hy, vx: Math.cos(a0 + i * 0.22) * 250, vy: Math.sin(a0 + i * 0.22) * 250, dmg: e.dmg * 0.6, life: 2.6, r: 7, leaf: true });
+    sfx.spit();
+    bossState(e, 'rest', 0.3);
+  } else if (sp === 'pounce') { e.sx = e.x; e.sy = e.y; sfx.dash(); bossState(e, 'act', 0.55); }
+  else if (sp === 'roar') {
+    ring(e.x, e.y, 290, '#ffd27a', 0.6); ring(e.x, e.y, 220, '#ffd27a', 0.45); ring(e.x, e.y, 150, '#fff', 0.3);
+    L.shake = 0.45;
+    if (dist(e, c) < 290) { hurtCat(e.dmg * 0.6); knockCat(e, 620); }
+    spawnEnemy('raccoon', around()); spawnEnemy('mouse', around()); spawnEnemy('mouse', around());
+    addText(e.x, e.y - e.r - 34, '吼————！', '#fff', 22, 1.2);
+    bossState(e, 'rest', 0.5);
+  } else if (sp === 'charge') { sfx.dash(); bossState(e, 'act', 1.1); }
 }
 function spawnWave() {
   const lv = G.level;
@@ -309,7 +395,7 @@ function damageEnemy(e, dmg) {
     } else {
       L.fish.push({ x: e.x, y: e.y, v: n });
       if (Math.random() < BUFF_DROP_CHANCE) dropBuff(e.x, e.y);
-      sfx.hit();
+      sfx.kill();
     }
   }
 }
@@ -321,25 +407,31 @@ function dropBuff(x, y) {
 }
 function applyBuff(b) {
   const c = L.cat;
-  if (b.dur) L.buffT[b.id] = b.dur;
+  if (b.dur) {
+    L.buffT[b.id] = b.dur;
+    // 变身！
+    L.morphT = 0.4; L.shake = Math.max(L.shake, 0.25);
+    ring(c.x, c.y, 120, b.color, 0.45); ring(c.x, c.y, 70, '#fff', 0.3);
+  }
   if (b.id === 'heal') c.hp = Math.min(catMaxHp(), c.hp + 35);
   if (b.id === 'magnet') for (const f of L.fish) f.fly = true;
   if (b.id === 'freeze') for (const e of L.enemies) burst(e.x, e.y, '#c8f4ff', 3, 60);
   addText(c.x, c.y - 44, `${b.name}${store.pinyin ? ' ' + b.py : ''}`, b.color, 18, 1.6);
   addText(c.x, c.y - 24, b.tip + '！', '#fff', 14, 1.6);
-  burst(c.x, c.y, b.color, 14, 180);
-  sfx.buy();
+  burst(c.x, c.y, b.color, 22, 240);
+  sfx.transform();
   speak(b.name);
 }
 
 function hurtCat(dmg) {
   const c = L.cat;
-  if (c.inv > 0 || L.buffT.shield > 0) return;
+  if (c.inv > 0 || L.buffT.shield > 0 || L.buffT.giant > 0) return;
   c.hp -= dmg; c.inv = 0.45; L.shake = Math.max(L.shake, 0.2);
   addText(c.x, c.y - 30, '-' + Math.round(dmg), '#ff6b5e', 16);
   sfx.hurt();
 }
 function hurtNest(dmg) {
+  sfx.nestHit();
   G.nestHp -= dmg; L.nestFlash = 0.15;
   addText(NEST.x + rand(-20, 20), NEST.y - 50, '-' + Math.round(dmg), '#ff6b5e', 15);
 }
@@ -356,10 +448,10 @@ function fireWeapon(c) {
     L.bullets.push({
       x: c.x + Math.cos(c.aim) * 24, y: c.y + Math.sin(c.aim) * 24,
       vx: Math.cos(a) * w.speed, vy: Math.sin(a) * w.speed,
-      dmg, life: w.life, r: w.r, pierce: w.pierce, explode: w.explode, color: w.color, kind: w.id, hit: new Set(),
+      dmg, life: w.life, r: w.r * (L.buffT.power > 0 ? 1.5 : 1), pierce: w.pierce, explode: w.explode, color: w.color, kind: w.id, hit: new Set(),
     });
   }
-  sfx.shoot();
+  sfx['shoot_' + w.id]();
 }
 function explode(b) {
   for (const e of L.enemies) if (dist(e, b) < b.explode + e.r) damageEnemy(e, b.dmg);
@@ -375,6 +467,93 @@ function nearestEnemy(p, range) {
 }
 
 // ---------- 每帧更新 ----------
+// 猫咪当前的变身形态：由生效中的增益决定，优先显示最厉害的
+const FORMS = {
+  giant: { s: 2.3, fur: '#ffcf5a', dark: '#e09a2a' },
+  power: { s: 1.45, fur: '#ff7a5c', dark: '#c8402d' },
+  rapid: { s: 1.2, fur: '#ffe066', dark: '#e0a800' },
+  shield: { s: 1.2, fur: '#8fc4ff', dark: '#4f8fdc' },
+  freeze: { s: 1.15, fur: '#c8f4ff', dark: '#7fd3e8' },
+};
+const currentForm = () => { for (const id in FORMS) if (L.buffT[id] > 0) return id; return null; };
+function updateForm(dt) {
+  const c = L.cat, form = currentForm();
+  if (L.form && !form) { burst(c.x, c.y, '#fff', 14, 160); sfx.revert(); }   // 变回原样
+  L.form = form;
+  L.morphT = Math.max(0, L.morphT - dt);
+  c.s += ((form ? FORMS[form].s : 1) - c.s) * Math.min(1, dt * 9);
+  // 残影
+  L.trailT -= dt;
+  if (form && form !== 'shield' && form !== 'freeze' && c.moving && L.trailT <= 0) { L.trailT = 0.06; L.trail.push({ x: c.x, y: c.y, s: c.s, color: FORMS[form].fur, life: 0.3 }); }
+  for (const t of L.trail) t.life -= dt;
+  L.trail = L.trail.filter(t => t.life > 0);
+  if (form === 'power' && Math.random() < 0.5) L.parts.push({ x: c.x + rand(-16, 16), y: c.y + rand(-10, 14), vx: rand(-15, 15), vy: rand(-110, -50), life: rand(0.3, 0.55), color: Math.random() < 0.5 ? '#ff6b5e' : '#ffb347', r: rand(3, 5.5) });
+  if (form === 'rapid' && Math.random() < 0.3) L.parts.push({ x: c.x + rand(-20, 20), y: c.y + rand(-24, 14), vx: rand(-60, 60), vy: rand(-60, 60), life: 0.2, color: '#fff7b0', r: rand(2, 3.5) });
+  // 巨猫踩扁靠近的敌人
+  if (form === 'giant') {
+    L.stompT -= dt;
+    if (L.stompT <= 0) {
+      L.stompT = 0.22;
+      let hit = false;
+      for (const e of L.enemies) if (dist(e, c) < 58 + e.r) { damageEnemy(e, 28 + 6 * G.level); hit = true; }
+      if (hit) { L.shake = Math.max(L.shake, 0.12); sfx.stompCat(); }
+    }
+  }
+}
+
+// 新道具：旋转飞镖、闪电云、小猫助手
+const SHURIKEN_R = 128;
+function updateGadgets(dt) {
+  const c = L.cat, lv = G.level;
+  if (G.items.shuriken) {
+    L.shAngle += dt * 3.2;
+    for (const e of L.enemies) e.shCd = (e.shCd || 0) - dt;
+    for (let i = 0; i < G.items.shuriken; i++) {
+      const a = L.shAngle + i * TAU / G.items.shuriken, bx = NEST.x + Math.cos(a) * SHURIKEN_R, by = NEST.y + Math.sin(a) * SHURIKEN_R;
+      for (const e of L.enemies) {
+        if (e.dead || e.shCd > 0 || Math.hypot(e.x - bx, e.y - by) > e.r + 22) continue;
+        e.shCd = 0.35; damageEnemy(e, 16 + 3 * lv);
+        burst(bx, by, '#dfe8f2', 4, 140); sfx.shuriken();
+      }
+    }
+  }
+  if (G.items.lightning) {
+    L.stormCd -= dt;
+    if (L.stormCd <= 0) {
+      const near = L.enemies.filter(e => !e.dead && dist(e, NEST) < 440).sort((a, b) => dist(a, NEST) - dist(b, NEST)).slice(0, G.items.lightning + 1);
+      if (near.length) {
+        L.stormCd = 3.4 - 0.5 * G.items.lightning;
+        for (const e of near) {
+          const pts = [[NEST.x, NEST.y - 95]];
+          for (let k = 1; k < 6; k++) pts.push([NEST.x + (e.x - NEST.x) * k / 6 + rand(-16, 16), NEST.y - 95 + (e.y - NEST.y + 95) * k / 6 + rand(-16, 16)]);
+          pts.push([e.x, e.y]);
+          L.bolts.push({ pts, life: 0.2 });
+          damageEnemy(e, 30 + 5 * lv); burst(e.x, e.y, '#fff7b0', 8, 200);
+        }
+        L.shake = Math.max(L.shake, 0.12); sfx.lightning();
+      } else L.stormCd = 0.3;
+    }
+  }
+  for (const h of L.helpers) {
+    // 跟在猫咪身后
+    const tx = c.x + h.side * 34, ty = c.y + 30, d = Math.hypot(tx - h.x, ty - h.y);
+    if (d > 6) { const v = Math.min(d * 5, 330) * dt / d; h.x += (tx - h.x) * v; h.y += (ty - h.y) * v; }
+    h.cd -= dt;
+    const e = nearestEnemy(h, 320);
+    if (e) {
+      h.aim = Math.atan2(e.y - h.y, e.x - h.x);
+      if (h.cd <= 0) {
+        h.cd = 0.55; sfx.helper();
+        L.bullets.push({ x: h.x, y: h.y, vx: Math.cos(h.aim) * 540, vy: Math.sin(h.aim) * 540, dmg: 8 + 1.5 * lv, life: 0.7, r: 4, pierce: 0, explode: 0, color: '#ffb347', kind: 'turret', hit: new Set() });
+      }
+    }
+  }
+  for (const r of L.rings) r.life -= dt;
+  for (const b of L.bolts) b.life -= dt;
+  L.rings = L.rings.filter(r => r.life > 0);
+  L.bolts = L.bolts.filter(b => b.life > 0);
+}
+
 function update(dt) {
   const c = L.cat;
   L.elapsed += dt;
@@ -394,7 +573,7 @@ function update(dt) {
   const ml = Math.hypot(mx, my);
   c.moving = ml > 0.15;
   if (c.moving) {
-    const sp = catSpeed() * (L.catnipT > 0 ? 1.4 : 1) * Math.min(1, ml);
+    const sp = catSpeed() * (L.catnipT > 0 ? 1.4 : 1) * (L.buffT.giant > 0 ? 1.15 : 1) * Math.min(1, ml);
     let nx = c.x + mx / ml * sp * dt, ny = c.y + my / ml * sp * dt;
     // 不能走进猫窝里
     const dn = Math.hypot(nx - NEST.x, ny - NEST.y), minD = NEST.r + c.r - 6;
@@ -402,7 +581,13 @@ function update(dt) {
     c.x = clamp(nx, c.r, WORLD.w - c.r); c.y = clamp(ny, c.r, WORLD.h - c.r);
     c.walk += dt * 12;
   }
+  // 被头目震飞
+  if (Math.abs(c.kx) + Math.abs(c.ky) > 5) {
+    c.x = clamp(c.x + c.kx * dt, c.r, WORLD.w - c.r); c.y = clamp(c.y + c.ky * dt, c.r, WORLD.h - c.r);
+    const k = Math.pow(0.002, dt); c.kx *= k; c.ky *= k;
+  }
   c.inv -= dt; c.cd -= dt;
+  updateForm(dt);
 
   // 瞄准与射击
   let firing = false;
@@ -428,12 +613,14 @@ function update(dt) {
     L.bossSpawned = true;
     L.boss = spawnEnemy('boss');
     L.shake = 0.4; sfx.boss();
-    openQuiz('头目来了！');
+    L.notice = { text: `${L.boss.kind.name}：${L.boss.kind.tip}`, t: 3.5 };
+    openQuiz(`${L.boss.kind.name}来了！`);
     return;
   }
   if (L.boss && !L.bossHalfAsked && L.boss.hp < L.boss.maxHp / 2) {
     L.bossHalfAsked = true;
-    openQuiz('头目发怒了！');
+    sfx.roar();
+    openQuiz(`${L.boss.kind.name}发怒了！`);
     return;
   }
 
@@ -452,8 +639,10 @@ function update(dt) {
     e.flash -= dt;
     if (frozen) continue;
     e.cd -= dt; e.cd2 -= dt; e.t += dt;
+    if (e.rage > 0) e.rage -= dt;
+    if (e.type === 'boss') { updateBoss(e, dt, c); continue; }
     const tgt = d.target === 'nest' ? NEST : c;
-    let spd = e.spd;
+    let spd = e.spd * (e.rage > 0 ? 1.4 : 1);
     if (e.type === 'elite' && e.t % 4 > 3) {   // 小头目每隔几秒冲刺一下
       spd *= 2.6;
       if (Math.random() < 0.4) L.parts.push({ x: e.x, y: e.y + e.r * 0.7, vx: rand(-30, 30), vy: rand(-30, 0), life: 0.35, color: '#e3cf9a', r: rand(3, 5) });
@@ -472,14 +661,8 @@ function update(dt) {
       L.ebullets.push({ x: e.x, y: e.y, vx: dx / dd * 210, vy: dy / dd * 210, dmg: e.dmg, life: 2.2, r: 6 });
     }
     if (!d.ranged && e.cd2 <= 0 && dist(e, c) < c.r + e.r - 4) { e.cd2 = 0.8; hurtCat(e.dmg); }
-    if (e.type === 'boss') {
-      e.summon -= dt;
-      if (e.summon <= 0) {
-        e.summon = 5;
-        for (let i = 0; i < 2; i++) spawnEnemy('mouse', { x: e.x + rand(-50, 50), y: e.y + rand(-50, 50) });
-      }
-    }
   }
+  updateGadgets(dt);
 
   // 子弹
   for (const b of L.bullets) {
@@ -488,6 +671,7 @@ function update(dt) {
       if (e.dead || b.hit.has(e) || dist(e, b) > e.r + b.r) continue;
       if (b.explode) { explode(b); b.dead = true; break; }
       damageEnemy(e, b.dmg); b.hit.add(e);
+      sfx.hit();
       burst(b.x, b.y, b.color, 3, 80);
       if (b.pierce-- <= 0) { b.dead = true; break; }
     }
@@ -505,7 +689,7 @@ function update(dt) {
     if (e) {
       t.aim = Math.atan2(e.y - t.y, e.x - t.x);
       if (t.cd <= 0) {
-        t.cd = 0.7;
+        t.cd = 0.7; sfx.turret();
         L.bullets.push({ x: t.x, y: t.y, vx: Math.cos(t.aim) * 520, vy: Math.sin(t.aim) * 520, dmg: 9 + G.level, life: 0.7, r: 4, pierce: 0, explode: 0, color: '#ffd84a', kind: 'turret', hit: new Set() });
       }
     }
@@ -548,7 +732,8 @@ function levelClear() {
   G.miniPlayed = false;
   saveRun();
   if (G.level > store.best) { store.best = G.level; save(); }
-  L.bullets = []; L.ebullets = []; L.drops = [];
+  L.bullets = []; L.ebullets = []; L.drops = []; L.rings = []; L.bolts = []; L.trail = [];
+  L.form = null; L.cat.kx = L.cat.ky = 0;
   L.clearT = 0; L.fireworkT = 0; L.notice = null;
   for (const k in L.buffT) L.buffT[k] = 0;
   L.catnipT = 0;
@@ -563,7 +748,7 @@ function updateClear(dt) {
   // 猫咪举枪蹦跳
   c.hop = -Math.abs(Math.sin(L.clearT * 7)) * 14;
   c.aim = -0.95 + Math.sin(L.clearT * 8) * 0.3;
-  c.moving = false; c.inv = 0;
+  c.moving = false; c.inv = 0; c.s += (1 - c.s) * Math.min(1, dt * 9);
   // 入侵者吓得逃跑
   for (const e of L.enemies) {
     const dx = e.x - NEST.x, dy = e.y - NEST.y, dd = Math.hypot(dx, dy) || 1;
@@ -585,7 +770,7 @@ function updateClear(dt) {
   if (L.fireworkT <= 0) {
     L.fireworkT = 0.4;
     burst(cam.x + rand(vw * 0.15, vw * 0.85), cam.y + rand(vh * 0.15, vh * 0.6), PARTY[randInt(0, 5)], 22, 260);
-    beep(rand(500, 900), 0.12, 'triangle', 0.03, 300);
+    sfx.firework();
   }
   for (const p of L.parts) { p.x += p.vx * dt; p.y += p.vy * dt; p.life -= dt; }
   for (const t of L.texts) { t.y -= 34 * dt; t.life -= dt; }
@@ -922,6 +1107,45 @@ function drawTurret(t) {
   for (const s of [-1, 1]) { ctx.beginPath(); ctx.moveTo(t.x + s * 4, t.y - 10); ctx.lineTo(t.x + s * 10, t.y - 18); ctx.lineTo(t.x + s * 11, t.y - 6); ctx.closePath(); ctx.fill(); ctx.stroke(); }
 }
 
+function drawHelper(h) {
+  const bob = Math.sin(performance.now() / 150 + h.side) * 2;
+  ell(h.x, h.y + 13, 10, 3.5, 'rgba(0,0,0,.18)');
+  ctx.lineWidth = 2; ell(h.x, h.y + 6 + bob, 8, 7, '#ffb347', OUT); ell(h.x, h.y + 8 + bob, 4, 4, '#fff');
+  ctx.save(); ctx.translate(h.x, h.y + 4 + bob); ctx.rotate(h.aim); ctx.lineWidth = 1.5; ctx.strokeStyle = OUT;
+  ctx.fillStyle = '#6b7686'; ctx.fillRect(5, -2, 11, 4); ctx.strokeRect(5, -2, 11, 4);
+  ctx.restore();
+  ctx.drawImage(ICONS.canvas.helper, h.x - 13, h.y - 21 + bob, 26, 26);
+}
+function drawGadgets() {
+  if (G.items.shuriken) {
+    for (let i = 0; i < G.items.shuriken; i++) {
+      const a = L.shAngle + i * TAU / G.items.shuriken, bx = NEST.x + Math.cos(a) * SHURIKEN_R, by = NEST.y + Math.sin(a) * SHURIKEN_R;
+      // 拖尾
+      ctx.lineCap = 'round';
+      for (let k = 0; k < 3; k++) {
+        ctx.strokeStyle = `rgba(200,225,255,${0.5 - k * 0.15})`; ctx.lineWidth = 9 - k * 2.5;
+        ctx.beginPath(); ctx.arc(NEST.x, NEST.y, SHURIKEN_R, a - 0.18 - k * 0.2, a - k * 0.2); ctx.stroke();
+      }
+      ctx.save(); ctx.translate(bx, by); ctx.rotate(performance.now() / 45);
+      ctx.drawImage(ICONS.canvas.shuriken, -21, -21, 42, 42);
+      ctx.restore();
+    }
+  }
+  if (G.items.lightning) {
+    const y = NEST.y - 112 + Math.sin(performance.now() / 500) * 4;
+    ctx.globalAlpha = 0.95; ctx.drawImage(ICONS.canvas.lightning, NEST.x - 30, y - 22, 60, 60); ctx.globalAlpha = 1;
+  }
+  for (const b of L.bolts) {
+    ctx.globalAlpha = clamp(b.life / 0.2, 0, 1); ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+    for (const [color, w] of [['#fff7b0', 9], ['#ffd84a', 5], ['#fff', 2]]) {
+      ctx.strokeStyle = color; ctx.lineWidth = w; ctx.beginPath();
+      b.pts.forEach((p, i) => i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1]));
+      ctx.stroke();
+    }
+  }
+  ctx.globalAlpha = 1;
+}
+
 function drawFish(f) {
   ctx.save(); ctx.translate(f.x, f.y + Math.sin(performance.now() / 200 + f.x) * 2);
   ctx.lineWidth = 1.5; ctx.strokeStyle = OUT; ctx.fillStyle = '#ffd27a';
@@ -946,7 +1170,14 @@ function drawCat(c) {
   const cheer = c.hop !== undefined;
   const face = cheer ? 1 : Math.cos(c.aim) < 0 ? -1 : 1;
   const bob = cheer ? c.hop : c.moving ? Math.sin(c.walk) * 2 : Math.sin(performance.now() / 400) * 0.8;
-  if (c.inv > 0 && Math.floor(c.inv * 20) % 2) ctx.globalAlpha = 0.5;
+  const form = L.form && FORMS[L.form];
+  const S = c.s * (1 + 0.45 * Math.sin(Math.PI * L.morphT / 0.4));   // 变身瞬间鼓一下
+  for (const t of L.trail) {   // 残影
+    ctx.globalAlpha = t.life; ell(t.x, t.y + 18 - 12 * t.s, 14 * t.s, 12 * t.s, t.color); ell(t.x, t.y + 18 - 30 * t.s, 15 * t.s, 13 * t.s, t.color);
+  }
+  ctx.globalAlpha = c.inv > 0 && Math.floor(c.inv * 20) % 2 ? 0.5 : 1;
+  ctx.save(); ctx.translate(c.x, c.y + 18); ctx.scale(S, S); ctx.translate(-c.x, -(c.y + 18));
+  if (L.form === 'giant') { ctx.strokeStyle = 'rgba(255,216,74,.9)'; ctx.lineWidth = 2.5; ctx.beginPath(); ctx.arc(c.x, c.y - 4, 30 + Math.sin(performance.now() / 90) * 2, 0, TAU); ctx.stroke(); }
   ell(c.x, c.y + 18, 17, 5, 'rgba(0,0,0,.18)');
   if (L.catnipT > 0) { ctx.strokeStyle = 'rgba(156,255,107,.8)'; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(c.x, c.y, 27 + Math.sin(performance.now() / 80) * 2, 0, TAU); ctx.stroke(); }
   if (L.buffT.shield > 0) {
@@ -956,7 +1187,7 @@ function drawCat(c) {
   if (L.buffT.power > 0) { ctx.strokeStyle = 'rgba(255,107,94,.85)'; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(c.x, c.y, 23 + Math.sin(performance.now() / 70) * 2, 0, TAU); ctx.stroke(); }
   ctx.save(); ctx.translate(c.x, c.y + bob); ctx.scale(cheer ? 1 : face, 1);
   ctx.lineWidth = 2.5; ctx.strokeStyle = OUT; ctx.lineJoin = 'round';
-  const FUR = '#aab6c8', DARK = '#7b889c';
+  const FUR = form ? form.fur : '#aab6c8', DARK = form ? form.dark : '#7b889c';
   // 尾巴
   ctx.lineWidth = 6; ctx.strokeStyle = OUT; ctx.lineCap = 'round';
   const tw = Math.sin(performance.now() / 180) * 4;
@@ -991,6 +1222,10 @@ function drawCat(c) {
     ctx.beginPath(); ctx.arc(9, -12, 2.6, Math.PI, 0); ctx.stroke();
   } else {
     ctx.fillStyle = OUT; ctx.beginPath(); ctx.arc(-2, -13, 2.2, 0, TAU); ctx.arc(9, -13, 2.2, 0, TAU); ctx.fill();
+    if (L.form === 'giant' || L.form === 'power') {   // 变身后眼神更凶
+      ctx.strokeStyle = OUT; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(-6, -18); ctx.lineTo(0, -15.5); ctx.moveTo(13, -18); ctx.lineTo(7, -15.5); ctx.stroke();
+    }
   }
   ctx.fillStyle = '#ff8fa3'; ctx.beginPath(); ctx.moveTo(2, -9.5); ctx.lineTo(6, -9.5); ctx.lineTo(4, -7.5); ctx.closePath(); ctx.fill();
   ctx.strokeStyle = OUT; ctx.lineWidth = 1.2; ctx.beginPath(); ctx.moveTo(4, -7.5); ctx.quadraticCurveTo(2, -4.5, 0.5, -6.5); ctx.moveTo(4, -7.5); ctx.quadraticCurveTo(6, -4.5, 7.5, -6.5); ctx.stroke();
@@ -1002,7 +1237,50 @@ function drawCat(c) {
   ctx.lineWidth = 2; ctx.strokeStyle = OUT;
   ell(11, 3, 4.5, 4, '#fff', OUT);   // 小爪子
   ctx.restore();
+  ctx.restore();
   ctx.globalAlpha = 1;
+}
+
+// 头目攻击前的地面预警
+function drawTelegraph(e) {
+  if (e.type !== 'boss' || (e.st !== 'wind' && e.st !== 'act')) return;
+  const sp = e.kind.special, wp = e.st === 'wind' ? 1 - e.stT / e.stDur : 1;
+  const fill = `rgba(230,60,40,${0.12 + 0.22 * wp})`, edge = 'rgba(230,60,40,.7)';
+  ctx.lineWidth = 2;
+  if (e.st === 'wind' && (sp === 'stomp' || sp === 'roar')) ell(e.x, e.y, sp === 'stomp' ? 210 : 290, sp === 'stomp' ? 210 : 290, fill, edge);
+  else if (sp === 'pounce') ell(e.tx, e.ty, 85, 85, fill, edge);
+  else if (e.st === 'wind' && (sp === 'charge' || sp === 'dash')) {
+    const len = sp === 'charge' ? 700 : 260;
+    ctx.save(); ctx.translate(e.x, e.y); ctx.rotate(e.dir);
+    ctx.fillStyle = fill; ctx.strokeStyle = edge;
+    ctx.beginPath(); ctx.roundRect(0, -e.r * 0.8, len, e.r * 1.6, 12); ctx.fill(); ctx.stroke();
+    ctx.restore();
+  }
+}
+// 根据头目当前的动作算出姿势，再交给 bosses.js 画
+function drawBossBody(e, fl) {
+  const sp = e.kind.special, wind = e.st === 'wind', act = e.st === 'act';
+  const wp = wind ? 1 - e.stT / e.stDur : 0;
+  const lunge = e.atkAnim > 0 ? Math.sin((1 - e.atkAnim / 0.4) * Math.PI) : 0;
+  const pose = { t: e.t, walk: e.walking, fl, mouth: lunge, headRot: -lunge * 0.15, lean: 0, puff: 0, trunkUp: lunge * 0.6 };
+  let crouch = 0, rear = 0, stretch = 0, shake = 0, tilt = 0;
+  if (wind) {
+    if (sp === 'bark') { pose.headRot = -0.45 * wp; pose.mouth = wp > 0.6 ? 1 : 0; }
+    else if (sp === 'dash' || sp === 'pounce') { crouch = wp; shake = 1.5; }
+    else if (sp === 'howl') { pose.headRot = -0.75 * wp; pose.mouth = wp; }
+    else if (sp === 'stomp') { rear = wp; pose.trunkUp = wp; }
+    else if (sp === 'spit') { pose.lean = wp; pose.mouth = wp; }
+    else if (sp === 'roar') { pose.mouth = 1; pose.puff = wp; shake = 2.5; pose.headRot = -0.2; }
+    else if (sp === 'charge') { pose.headRot = 0.3 * wp; crouch = 0.3 * wp; shake = 2; }
+  } else if (act) {
+    if (sp === 'dash' || sp === 'charge') { stretch = 1; tilt = 0.1; pose.walk = true; pose.t = e.t * 3; pose.headRot = sp === 'charge' ? 0.3 : 0; }
+    else if (sp === 'pounce') { pose.mouth = 1; tilt = -0.25 + 0.5 * (1 - e.stT / e.stDur); }
+  } else if (e.st === 'rest' && (sp === 'roar' || sp === 'bark' || sp === 'howl')) { pose.mouth = 1; pose.puff = 1; if (sp === 'howl') pose.headRot = -0.75; }
+  const k = e.r / 40;
+  ctx.translate(lunge * 16 + (shake ? rand(-shake, shake) : 0), -e.z - rear * 22 + crouch * 7);
+  ctx.rotate(tilt - rear * 0.38);
+  ctx.scale(k * (1 + stretch * 0.14 + crouch * 0.08), k * (1 - crouch * 0.2 - stretch * 0.08));
+  BOSS_ART.draw(ctx, e.kind.id, pose);
 }
 
 function drawEnemy(e) {
@@ -1052,25 +1330,7 @@ function drawEnemy(e) {
     ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(5, -3, 3, 0, TAU); ctx.fill();
     ctx.fillStyle = OUT; ctx.beginPath(); ctx.arc(6, -3, 1.4, 0, TAU); ctx.fill();
   } else if (e.type === 'boss') {
-    const c = fl ? '#fff' : '#a9703f', dk = '#6f4524';
-    ctx.lineWidth = 3.5;
-    ctx.lineWidth = 9; ctx.strokeStyle = OUT; ctx.beginPath(); ctx.moveTo(-r + 4, 4); ctx.quadraticCurveTo(-r - 18, 0, -r - 14, -22 + wob * 2); ctx.stroke();
-    ctx.lineWidth = 5; ctx.strokeStyle = dk; ctx.stroke(); ctx.lineWidth = 3.5; ctx.strokeStyle = OUT;
-    ell(-14, r - 2, 10, 6, dk, OUT); ell(14, r - 2, 10, 6, dk, OUT);
-    ell(0, 6, r, r * 0.8, c, OUT);
-    // 耷拉的耳朵
-    ell(-20, -24, 9, 16, dk, OUT); ell(26, -24, 9, 16, dk, OUT);
-    ell(4, -18, 26, 22, c, OUT);
-    ell(10, -9, 14, 10, '#f0d9bd');
-    ell(14, -14, 5, 3.5, OUT);
-    ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(-4, -24, 4.5, 0, TAU); ctx.arc(16, -24, 4.5, 0, TAU); ctx.fill();
-    ctx.fillStyle = '#c8402d'; ctx.beginPath(); ctx.arc(-3, -24, 2.2, 0, TAU); ctx.arc(17, -24, 2.2, 0, TAU); ctx.fill();
-    ctx.beginPath(); ctx.moveTo(-11, -33); ctx.lineTo(1, -28); ctx.moveTo(24, -33); ctx.lineTo(12, -28); ctx.stroke();   // 生气的眉毛
-    ctx.beginPath(); ctx.moveTo(3, -4); ctx.quadraticCurveTo(10, 0, 18, -4); ctx.stroke();
-    ctx.fillStyle = '#fff'; ctx.fillRect(6, -4, 3, 4); ctx.fillRect(13, -4, 3, 4);
-    // 带刺项圈
-    ctx.strokeStyle = '#c8402d'; ctx.lineWidth = 6; ctx.beginPath(); ctx.moveTo(-18, 0); ctx.quadraticCurveTo(4, 9, 26, 0); ctx.stroke();
-    ctx.fillStyle = '#e6e6e6'; for (let i = -1; i <= 1; i++) { ctx.beginPath(); ctx.arc(4 + i * 12, 4 - Math.abs(i) * 2, 2.5, 0, TAU); ctx.fill(); }
+    drawBossBody(e, fl);
   } else if (e.type === 'elite') {
     const c = fl ? '#fff' : '#9a8672';
     const dash = e.t % 4 > 3;
@@ -1097,12 +1357,14 @@ function drawEnemy(e) {
   // 冰冻效果
   if (L.buffT.freeze > 0) {
     ctx.lineWidth = 2;
-    ell(e.x, e.y - (e.type === 'boss' ? 8 : 0), r * 1.25, r * 1.25, 'rgba(160,230,255,.45)', 'rgba(255,255,255,.9)');
+    ell(e.x, e.y - (e.type === 'boss' ? 8 : 0) - (e.z || 0), r * 1.25, r * 1.25, 'rgba(160,230,255,.45)', 'rgba(255,255,255,.9)');
   }
   // 血条
   const big = e.type === 'boss' || e.type === 'elite';
   if (e.hp < e.maxHp || big) {
-    const bw = e.type === 'boss' ? 90 : e.type === 'elite' ? 56 : r * 2, by = e.y - r - (e.type === 'boss' ? 30 : e.type === 'elite' ? 26 : 14);
+    const bw = e.type === 'boss' ? 96 : e.type === 'elite' ? 56 : r * 2;
+    const by = e.y - (e.z || 0) - (e.type === 'boss' ? (e.kind.barY || r + 34) : r + (e.type === 'elite' ? 26 : 14));
+    if (e.type === 'boss') outlined(e.kind.name, e.x, by - 12, 14, e.hp < e.maxHp / 2 ? '#ff9a8a' : '#fff');
     ctx.fillStyle = OUT; ctx.fillRect(e.x - bw / 2 - 1, by - 1, bw + 2, 6);
     ctx.fillStyle = big ? '#c8402d' : '#ff7a5c'; ctx.fillRect(e.x - bw / 2, by, bw * clamp(e.hp / e.maxHp, 0, 1), 4);
   }
@@ -1189,7 +1451,7 @@ function drawHUD() {
     if (sx < 0 || sx > W || sy < 0 || sy > H) {
       const a = Math.atan2(sy - H / 2, sx - W / 2);
       const px = clamp(W / 2 + Math.cos(a) * W, 36, W - 36), py = clamp(H / 2 + Math.sin(a) * H, 90, H - 30);
-      outlined(e.type === 'boss' ? '头目' : '小头目', px, py, 15, '#ff9a8a');
+      outlined(e.type === 'boss' ? e.kind.name : '小头目', px, py, 15, '#ff9a8a');
     }
   }
   if (L.notice) { ctx.globalAlpha = clamp(L.notice.t, 0, 1); outlined(L.notice.text, W / 2, H * 0.24, 26, '#ff9a8a'); ctx.globalAlpha = 1; }
@@ -1226,16 +1488,29 @@ function render() {
   drawGround();
   drawFence();
   if (!L) { drawNest(); ctx.restore(); return; }
+  for (const e of L.enemies) drawTelegraph(e);
+  for (const r of L.rings) {
+    const p = 1 - r.life / r.maxLife;
+    ctx.globalAlpha = 1 - p; ctx.strokeStyle = r.color; ctx.lineWidth = 6 * (1 - p) + 2;
+    ctx.beginPath(); ctx.arc(r.x, r.y, r.max * p, 0, TAU); ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
   for (const f of L.fish) drawFish(f);
   for (const d of L.drops) drawDrop(d);
   // 按 y 排序，产生前后遮挡
   const objs = [{ y: NEST.y + 30, draw: drawNest }, { y: L.cat.y, draw: () => drawCat(L.cat) }];
   for (const t of L.turrets) objs.push({ y: t.y, draw: () => drawTurret(t) });
   for (const e of L.enemies) objs.push({ y: e.y, draw: () => drawEnemy(e) });
+  for (const h of L.helpers) objs.push({ y: h.y, draw: () => drawHelper(h) });
   objs.sort((a, b) => a.y - b.y);
   for (const o of objs) o.draw();
+  drawGadgets();
   for (const b of L.bullets) drawBullet(b);
-  for (const b of L.ebullets) { ell(b.x, b.y, b.r, b.r, '#5b4a6b', OUT); ell(b.x - 1.5, b.y - 1.5, 2, 2, '#b8a8c8'); }
+  ctx.lineWidth = 2;
+  for (const b of L.ebullets) {
+    if (b.leaf) { ctx.save(); ctx.translate(b.x, b.y); ctx.rotate(Math.atan2(b.vy, b.vx)); ell(0, 0, 10, 5, '#5fc23f', OUT); ctx.restore(); }
+    else { ell(b.x, b.y, b.r, b.r, '#5b4a6b', OUT); ell(b.x - 1.5, b.y - 1.5, 2, 2, '#b8a8c8'); }
+  }
   for (const p of L.parts) {
     if (p.color === 'boom') {
       ctx.globalAlpha = clamp(p.life / 0.25, 0, 1) * 0.6;
@@ -1267,5 +1542,5 @@ setState('menu');
 requestAnimationFrame(frame);
 
 // 调试接口
-window.__cat = { get G() { return G; }, get L() { return L; }, get state() { return state; }, set auto(v) { touchMode = v; }, update };
+window.__cat = { get G() { return G; }, get L() { return L; }, get state() { return state; }, set auto(v) { touchMode = v; }, update, startLevel, applyBuff };
 })();

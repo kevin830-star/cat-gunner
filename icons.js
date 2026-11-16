@@ -139,6 +139,39 @@ const ICONS = (() => {
       rr(9.5, 44, 13, 9, 1, '#eef1f4'); rr(37.5, 44, 13, 9, 1, '#eef1f4');
       line([24, 58, 24, 62], '#ffb347', 2.5); line([30, 59, 30, 63], '#ffb347', 2.5); line([36, 58, 36, 62], '#ffb347', 2.5);
     },
+    // 旋转飞镖：四角飞镖加旋转弧线
+    shuriken() {
+      c.save(); c.strokeStyle = '#8fd0ff'; c.lineWidth = 3;
+      c.beginPath(); c.arc(32, 32, 28, 0.3, 1.3); c.stroke();
+      c.beginPath(); c.arc(32, 32, 28, 3.4, 4.4); c.stroke();
+      c.restore();
+      c.translate(32, 32); c.rotate(0.3);
+      const pts = [];
+      for (let i = 0; i < 8; i++) { const a = i * TAU / 8, r = i % 2 ? 9 : 25; pts.push(Math.cos(a) * r, Math.sin(a) * r); }
+      poly(pts, '#c9d3de');
+      for (let i = 0; i < 4; i++) { const a = i * TAU / 4; line([0, 0, Math.cos(a) * 22, Math.sin(a) * 22], '#8a96a3', 2); }
+      circ(0, 0, 5, '#e8483f');
+    },
+    // 闪电云：乌云加闪电
+    lightning() {
+      poly([35, 34, 24, 48, 32, 48, 27, 62, 45, 43, 36, 43, 41, 34], '#ffd84a');
+      const cloud = '#8a96a3';
+      circ(21, 26, 10, cloud); circ(34, 20, 13, cloud); circ(47, 27, 10, cloud); rr(14, 24, 40, 13, 6.5, cloud);
+      c.fillStyle = cloud; c.fillRect(18, 22, 32, 10);
+      circ(21, 26, 7, cloud, false); circ(34, 21, 10, cloud, false); circ(47, 27, 7, cloud, false);
+    },
+    // 小猫助手：橘色小猫头
+    helper() {
+      const F = '#ffb347';
+      poly([14, 28, 13, 8, 28, 20], F); poly([50, 28, 51, 8, 36, 20], F);
+      poly([17, 22, 16.5, 13, 23, 19], '#ffadc6'); poly([47, 22, 47.5, 13, 41, 19], '#ffadc6');
+      circ(32, 36, 21, F);
+      c.save(); c.lineWidth = 0; c.fillStyle = '#fff'; c.beginPath(); c.ellipse(32, 44, 10, 7, 0, 0, TAU); c.fill(); c.restore();
+      circ(24, 34, 2.6, OUT, false); circ(40, 34, 2.6, OUT, false);
+      c.save(); c.lineWidth = 1.5; poly([30, 40, 34, 40, 32, 42.5], '#ff8fa3');
+      c.beginPath(); c.moveTo(32, 42.5); c.quadraticCurveTo(29, 47, 26.5, 44); c.moveTo(32, 42.5); c.quadraticCurveTo(35, 47, 37.5, 44); c.stroke(); c.restore();
+      line([27, 20, 27, 25], '#e08a1e', 2); line([32, 19, 32, 25], '#e08a1e', 2); line([37, 20, 37, 25], '#e08a1e', 2);
+    },
     // 猫咪生命：爱心
     catHp() {
       c.beginPath(); c.moveTo(32, 54);
