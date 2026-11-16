@@ -105,12 +105,12 @@ window.addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
 window.addEventListener('blur', () => { for (const k in keys) keys[k] = false; mouse.down = false; if (state === 'playing') pauseGame(); });
 
 canvas.addEventListener('mousemove', e => { mouse.x = e.clientX; mouse.y = e.clientY; });
-canvas.addEventListener('mousedown', e => { initAudio(); mouse.x = e.clientX; mouse.y = e.clientY; mouse.down = true; touchMode = false; });
+canvas.addEventListener('mousedown', e => { initAudio(); skipClear(); mouse.x = e.clientX; mouse.y = e.clientY; mouse.down = true; touchMode = false; });
 window.addEventListener('mouseup', () => { mouse.down = false; });
 canvas.addEventListener('contextmenu', e => e.preventDefault());
 
 canvas.addEventListener('touchstart', e => {
-  e.preventDefault(); initAudio();
+  e.preventDefault(); initAudio(); skipClear();
   if (!touchMode) { touchMode = true; document.body.classList.add('touch'); }
   if (!joy.active) {
     const t = e.changedTouches[0];
@@ -207,6 +207,13 @@ function continueGame() {
   show('shop');
 }
 
+// 小头目出现的时间（秒）：第 2 关起每关都有，越往后越多
+function eliteSchedule(lv) {
+  if (lv < 2) return [];
+  if (isBossLevel(lv)) return lv >= 9 ? [35] : [];
+  return lv >= 8 ? [15, 30, 45] : lv >= 5 ? [18, 40] : [22];
+}
+
 function startLevel() {
   L = {
     time: LEVEL_TIME, elapsed: 0, spawnT: 1.2,
@@ -215,6 +222,8 @@ function startLevel() {
     atkBuff: 0, catnipLeft: G.items.catnip, catnipT: 0,
     boss: null, bossSpawned: false, bossHalfAsked: false, isBoss: isBossLevel(G.level),
     shake: 0, banner: 2.2, nestFlash: 0,
+    drops: [], buffT: { power: 0, rapid: 0, shield: 0, freeze: 0 },
+    eliteTimes: eliteSchedule(G.level), notice: null, clearT: 0, fireworkT: 0,
   };
   for (let i = 0; i < G.items.turret; i++) {
     const a = Math.PI / 4 + i * Math.PI / 2;
@@ -241,7 +250,7 @@ function useCatnip() {
 }
 
 // ---------- 效果 ----------
-function addText(x, y, text, color = '#fff', size = 14) { L.texts.push({ x, y, text, color, size, life: 0.9 }); }
+function addText(x, y, text, color = '#fff', size = 14, life = 0.9) { L.texts.push({ x, y, text, color, size, life }); }
 function burst(x, y, color, n = 6, speed = 120) {
   for (let i = 0; i < n; i++) {
     const a = rand(0, TAU), s = rand(speed * 0.3, speed);
@@ -291,16 +300,41 @@ function damageEnemy(e, dmg) {
     const n = randInt(d.fish[0], d.fish[1]);
     if (e.type === 'boss') {
       for (let i = 0; i < 10; i++) L.fish.push({ x: e.x + rand(-40, 40), y: e.y + rand(-40, 40), v: Math.ceil(n / 10) });
+      dropBuff(e.x - 30, e.y); dropBuff(e.x + 30, e.y);
       L.boss = null; L.shake = 0.5; sfx.boom();
+    } else if (e.type === 'elite') {
+      for (let i = 0; i < 4; i++) L.fish.push({ x: e.x + rand(-25, 25), y: e.y + rand(-25, 25), v: Math.ceil(n / 4) });
+      dropBuff(e.x, e.y);
+      L.shake = 0.3; sfx.boom();
     } else {
       L.fish.push({ x: e.x, y: e.y, v: n });
+      if (Math.random() < BUFF_DROP_CHANCE) dropBuff(e.x, e.y);
       sfx.hit();
     }
   }
 }
+// ---------- 增益掉落 ----------
+function dropBuff(x, y) {
+  if (L.drops.length >= 6) return;
+  const b = BUFFS[randInt(0, BUFFS.length - 1)];
+  L.drops.push({ x: clamp(x, 30, WORLD.w - 30), y: clamp(y, 30, WORLD.h - 30), buff: b, life: 12, t: rand(0, 6) });
+}
+function applyBuff(b) {
+  const c = L.cat;
+  if (b.dur) L.buffT[b.id] = b.dur;
+  if (b.id === 'heal') c.hp = Math.min(catMaxHp(), c.hp + 35);
+  if (b.id === 'magnet') for (const f of L.fish) f.fly = true;
+  if (b.id === 'freeze') for (const e of L.enemies) burst(e.x, e.y, '#c8f4ff', 3, 60);
+  addText(c.x, c.y - 44, `${b.name}${store.pinyin ? ' ' + b.py : ''}`, b.color, 18, 1.6);
+  addText(c.x, c.y - 24, b.tip + '！', '#fff', 14, 1.6);
+  burst(c.x, c.y, b.color, 14, 180);
+  sfx.buy();
+  speak(b.name);
+}
+
 function hurtCat(dmg) {
   const c = L.cat;
-  if (c.inv > 0) return;
+  if (c.inv > 0 || L.buffT.shield > 0) return;
   c.hp -= dmg; c.inv = 0.45; L.shake = Math.max(L.shake, 0.2);
   addText(c.x, c.y - 30, '-' + Math.round(dmg), '#ff6b5e', 16);
   sfx.hurt();
@@ -313,9 +347,9 @@ function hurtNest(dmg) {
 // ---------- 射击 ----------
 function fireWeapon(c) {
   const w = weaponDef(G.cur), lv = G.weapons[w.id];
-  const fast = L.catnipT > 0 ? 0.65 : 1;
+  const fast = (L.catnipT > 0 ? 0.65 : 1) * (L.buffT.rapid > 0 ? 0.6 : 1);
   c.cd = weaponInterval(w, lv) * fast;
-  const dmg = weaponDmg(w, lv) * (1 + L.atkBuff);
+  const dmg = weaponDmg(w, lv) * (1 + L.atkBuff) * (L.buffT.power > 0 ? 2 : 1);
   for (let i = 0; i < w.count; i++) {
     let a = c.aim + rand(-w.jitter, w.jitter);
     if (w.count > 1) a += (i / (w.count - 1) - 0.5) * w.spread;
@@ -347,6 +381,8 @@ function update(dt) {
   L.time = Math.max(0, L.time - dt);
   L.banner -= dt; L.shake = Math.max(0, L.shake - dt); L.nestFlash -= dt;
   if (L.catnipT > 0) L.catnipT -= dt;
+  for (const k in L.buffT) if (L.buffT[k] > 0) L.buffT[k] -= dt;
+  if (L.notice) { L.notice.t -= dt; if (L.notice.t <= 0) L.notice = null; }
 
   // 移动
   let mx = 0, my = 0;
@@ -401,12 +437,27 @@ function update(dt) {
     return;
   }
 
+  // 小头目
+  while (L.eliteTimes.length && L.elapsed >= L.eliteTimes[0]) {
+    L.eliteTimes.shift();
+    spawnEnemy('elite');
+    L.notice = { text: '小头目来了！', t: 2.2 };
+    sfx.boss();
+  }
+
   // 敌人
+  const frozen = L.buffT.freeze > 0;
   for (const e of L.enemies) {
     const d = ENEMIES[e.type];
-    e.cd -= dt; e.cd2 -= dt; e.flash -= dt; e.t += dt;
+    e.flash -= dt;
+    if (frozen) continue;
+    e.cd -= dt; e.cd2 -= dt; e.t += dt;
     const tgt = d.target === 'nest' ? NEST : c;
     let spd = e.spd;
+    if (e.type === 'elite' && e.t % 4 > 3) {   // 小头目每隔几秒冲刺一下
+      spd *= 2.6;
+      if (Math.random() < 0.4) L.parts.push({ x: e.x, y: e.y + e.r * 0.7, vx: rand(-30, 30), vy: rand(-30, 0), life: 0.35, color: '#e3cf9a', r: rand(3, 5) });
+    }
     if (G.items.fence && dist(e, NEST) < FENCE_R) spd *= 1 - 0.15 * G.items.fence;
     const dx = tgt.x - e.x, dy = tgt.y - e.y, dd = Math.hypot(dx, dy) || 1;
     const stop = d.ranged ? 230 : (tgt === NEST ? NEST.r + e.r - 4 : c.r + e.r - 8);
@@ -464,9 +515,15 @@ function update(dt) {
   const magR = 60 + 45 * G.items.magnet;
   for (const f of L.fish) {
     const d = dist(f, c);
-    if (d < magR) { const s = 420 * dt / (d || 1); f.x += (c.x - f.x) * Math.min(1, s); f.y += (c.y - f.y) * Math.min(1, s); }
+    if (f.fly || d < magR) { const s = (f.fly ? 800 : 420) * dt / (d || 1); f.x += (c.x - f.x) * Math.min(1, s); f.y += (c.y - f.y) * Math.min(1, s); }
     if (d < c.r + 8) { f.dead = true; G.fish += f.v; sfx.pickup(); }
   }
+  // 增益掉落物
+  for (const d of L.drops) {
+    d.life -= dt; d.t += dt;
+    if (dist(d, c) < c.r + 18) { d.life = 0; applyBuff(d.buff); }
+  }
+  L.drops = L.drops.filter(d => d.life > 0);
 
   for (const p of L.parts) { p.x += p.vx * dt; p.y += p.vy * dt; p.life -= dt; }
   for (const t of L.texts) { t.y -= 34 * dt; t.life -= dt; }
@@ -483,16 +540,63 @@ function update(dt) {
   if (L.time <= 0 && !L.boss) levelClear();
 }
 
+// 过关：先结算并存档，再播放庆祝动画，最后进商店
 function levelClear() {
-  for (const f of L.fish) G.fish += f.v;   // 自动收走地上的小鱼干
-  for (const e of L.enemies) burst(e.x, e.y, '#fff', 6);   // 剩下的入侵者逃跑了
-  L.fish = []; L.enemies = []; L.ebullets = []; L.bullets = [];
+  for (const f of L.fish) { G.fish += f.v; f.v = 0; f.fly = true; }   // 地上的小鱼干飞向猫咪
   G.lastBonus = 10 + 5 * G.level;
   G.fish += G.lastBonus;
   G.miniPlayed = false;
   saveRun();
   if (G.level > store.best) { store.best = G.level; save(); }
+  L.bullets = []; L.ebullets = []; L.drops = [];
+  L.clearT = 0; L.fireworkT = 0; L.notice = null;
+  for (const k in L.buffT) L.buffT[k] = 0;
+  L.catnipT = 0;
   sfx.right();
+  setState('clear');
+}
+const CLEAR_TIME = 3.2;
+const PARTY = ['#ff6b5e', '#ffd84a', '#7ed957', '#5aa9ff', '#ff8fb1', '#b48cff'];
+function updateClear(dt) {
+  const c = L.cat;
+  L.clearT += dt; L.shake = 0;
+  // 猫咪举枪蹦跳
+  c.hop = -Math.abs(Math.sin(L.clearT * 7)) * 14;
+  c.aim = -0.95 + Math.sin(L.clearT * 8) * 0.3;
+  c.moving = false; c.inv = 0;
+  // 入侵者吓得逃跑
+  for (const e of L.enemies) {
+    const dx = e.x - NEST.x, dy = e.y - NEST.y, dd = Math.hypot(dx, dy) || 1;
+    e.x += dx / dd * 300 * dt; e.y += dy / dd * 300 * dt;
+    e.face = dx < 0 ? -1 : 1; e.t += dt * 2; e.flash = 0;
+    if (e.x < -60 || e.x > WORLD.w + 60 || e.y < -60 || e.y > WORLD.h + 60) e.dead = true;
+  }
+  L.enemies = L.enemies.filter(e => !e.dead);
+  for (const f of L.fish) {
+    const d = dist(f, c), s = 800 * dt / (d || 1);
+    f.x += (c.x - f.x) * Math.min(1, s); f.y += (c.y - f.y) * Math.min(1, s);
+    if (d < c.r + 8) { f.dead = true; sfx.pickup(); }
+  }
+  L.fish = L.fish.filter(f => !f.dead);
+  // 彩纸和烟花
+  const vw = W / scale, vh = H / scale;
+  for (let i = 0; i < 2; i++) L.parts.push({ x: cam.x + rand(0, vw), y: cam.y - 10, vx: rand(-40, 40), vy: rand(140, 300), life: rand(1.2, 2.2), color: PARTY[randInt(0, 5)], r: rand(3, 5.5) });
+  L.fireworkT -= dt;
+  if (L.fireworkT <= 0) {
+    L.fireworkT = 0.4;
+    burst(cam.x + rand(vw * 0.15, vw * 0.85), cam.y + rand(vh * 0.15, vh * 0.6), PARTY[randInt(0, 5)], 22, 260);
+    beep(rand(500, 900), 0.12, 'triangle', 0.03, 300);
+  }
+  for (const p of L.parts) { p.x += p.vx * dt; p.y += p.vy * dt; p.life -= dt; }
+  for (const t of L.texts) { t.y -= 34 * dt; t.life -= dt; }
+  L.parts = L.parts.filter(p => p.life > 0);
+  L.texts = L.texts.filter(t => t.life > 0);
+  if (L.clearT >= CLEAR_TIME) openShop();
+}
+function skipClear() { if (state === 'clear' && L.clearT > 0.7) openShop(); }
+function openShop() {
+  delete L.cat.hop;
+  L.enemies = []; L.fish = [];
   setState('shop');
   renderShop();
   $('shopBody').scrollTop = 0;
@@ -827,13 +931,30 @@ function drawFish(f) {
   ctx.restore();
 }
 
+function drawDrop(d) {
+  if (d.life < 3 && Math.floor(d.life * 6) % 2) return;   // 快消失时闪烁
+  const y = d.y + Math.sin(d.t * 4) * 3;
+  ell(d.x, d.y + 17, 13, 4, 'rgba(0,0,0,.18)');
+  ctx.lineWidth = 2; ctx.strokeStyle = 'rgba(255,255,255,.8)';
+  ctx.beginPath(); ctx.arc(d.x, y, 20 + Math.sin(d.t * 6) * 2, 0, TAU); ctx.stroke();
+  ctx.lineWidth = 3; ell(d.x, y, 15, 15, d.buff.color, OUT);
+  ell(d.x - 5, y - 6, 4, 2.5, 'rgba(255,255,255,.55)');
+  outlined(d.buff.ch, d.x, y + 1, 17);
+}
+
 function drawCat(c) {
-  const face = Math.cos(c.aim) < 0 ? -1 : 1;
-  const bob = c.moving ? Math.sin(c.walk) * 2 : Math.sin(performance.now() / 400) * 0.8;
+  const cheer = c.hop !== undefined;
+  const face = cheer ? 1 : Math.cos(c.aim) < 0 ? -1 : 1;
+  const bob = cheer ? c.hop : c.moving ? Math.sin(c.walk) * 2 : Math.sin(performance.now() / 400) * 0.8;
   if (c.inv > 0 && Math.floor(c.inv * 20) % 2) ctx.globalAlpha = 0.5;
   ell(c.x, c.y + 18, 17, 5, 'rgba(0,0,0,.18)');
   if (L.catnipT > 0) { ctx.strokeStyle = 'rgba(156,255,107,.8)'; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(c.x, c.y, 27 + Math.sin(performance.now() / 80) * 2, 0, TAU); ctx.stroke(); }
-  ctx.save(); ctx.translate(c.x, c.y + bob); ctx.scale(face, 1);
+  if (L.buffT.shield > 0) {
+    const blink = L.buffT.shield < 1.5 && Math.floor(L.buffT.shield * 8) % 2;
+    if (!blink) { ctx.lineWidth = 3; ell(c.x, c.y - 4, 32, 32, 'rgba(90,169,255,.25)', 'rgba(90,169,255,.9)'); }
+  }
+  if (L.buffT.power > 0) { ctx.strokeStyle = 'rgba(255,107,94,.85)'; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(c.x, c.y, 23 + Math.sin(performance.now() / 70) * 2, 0, TAU); ctx.stroke(); }
+  ctx.save(); ctx.translate(c.x, c.y + bob); ctx.scale(cheer ? 1 : face, 1);
   ctx.lineWidth = 2.5; ctx.strokeStyle = OUT; ctx.lineJoin = 'round';
   const FUR = '#aab6c8', DARK = '#7b889c';
   // 尾巴
@@ -864,7 +985,13 @@ function drawCat(c) {
   ctx.beginPath(); ctx.moveTo(-3, -24); ctx.lineTo(-3, -20); ctx.moveTo(0, -25); ctx.lineTo(0, -20); ctx.moveTo(3, -24); ctx.lineTo(3, -20); ctx.stroke();
   // 脸
   ell(3, -8, 7, 5, '#fff');
-  ctx.fillStyle = OUT; ctx.beginPath(); ctx.arc(-2, -13, 2.2, 0, TAU); ctx.arc(9, -13, 2.2, 0, TAU); ctx.fill();
+  if (cheer) {   // 开心的眯眯眼
+    ctx.strokeStyle = OUT; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(-2, -12, 2.6, Math.PI, 0); ctx.stroke();
+    ctx.beginPath(); ctx.arc(9, -12, 2.6, Math.PI, 0); ctx.stroke();
+  } else {
+    ctx.fillStyle = OUT; ctx.beginPath(); ctx.arc(-2, -13, 2.2, 0, TAU); ctx.arc(9, -13, 2.2, 0, TAU); ctx.fill();
+  }
   ctx.fillStyle = '#ff8fa3'; ctx.beginPath(); ctx.moveTo(2, -9.5); ctx.lineTo(6, -9.5); ctx.lineTo(4, -7.5); ctx.closePath(); ctx.fill();
   ctx.strokeStyle = OUT; ctx.lineWidth = 1.2; ctx.beginPath(); ctx.moveTo(4, -7.5); ctx.quadraticCurveTo(2, -4.5, 0.5, -6.5); ctx.moveTo(4, -7.5); ctx.quadraticCurveTo(6, -4.5, 7.5, -6.5); ctx.stroke();
   ctx.restore();
@@ -944,13 +1071,40 @@ function drawEnemy(e) {
     // 带刺项圈
     ctx.strokeStyle = '#c8402d'; ctx.lineWidth = 6; ctx.beginPath(); ctx.moveTo(-18, 0); ctx.quadraticCurveTo(4, 9, 26, 0); ctx.stroke();
     ctx.fillStyle = '#e6e6e6'; for (let i = -1; i <= 1; i++) { ctx.beginPath(); ctx.arc(4 + i * 12, 4 - Math.abs(i) * 2, 2.5, 0, TAU); ctx.fill(); }
+  } else if (e.type === 'elite') {
+    const c = fl ? '#fff' : '#9a8672';
+    const dash = e.t % 4 > 3;
+    ctx.lineWidth = 4; ctx.beginPath(); ctx.moveTo(-r, 6); ctx.quadraticCurveTo(-r - 18, 12 + wob, -r - 22, -6); ctx.strokeStyle = '#e59aa0'; ctx.stroke();
+    ctx.lineWidth = 3; ctx.strokeStyle = OUT;
+    // 小披风
+    ctx.fillStyle = '#c8402d'; ctx.beginPath(); ctx.moveTo(-8, -6); ctx.lineTo(-r - 8, 4 + wob); ctx.lineTo(-r - 2, 16); ctx.lineTo(-4, 12); ctx.closePath(); ctx.fill(); ctx.stroke();
+    ell(-12, -r + 6, 9, 9, c, OUT); ell(-12, -r + 6, 4.5, 4.5, '#f5b8bd');
+    ell(0, 2, r, r * 0.85, c, OUT);
+    ell(4, 9, 11, 8, '#e9dccb');
+    // 铁桶头盔
+    ctx.fillStyle = fl ? '#fff' : '#9aa7b5';
+    ctx.beginPath(); ctx.moveTo(-10, -8); ctx.lineTo(-7, -r - 10); ctx.lineTo(19, -r - 10); ctx.lineTo(22, -8); ctx.closePath(); ctx.fill(); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(-12, -8); ctx.lineTo(24, -8); ctx.stroke();
+    ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(6, -r - 10, 9, Math.PI, 0); ctx.stroke(); ctx.lineWidth = 3;
+    // 凶凶的眼睛
+    ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(10, -1, 4, 0, TAU); ctx.fill();
+    ctx.fillStyle = dash ? '#c8402d' : OUT; ctx.beginPath(); ctx.arc(11, -1, 2, 0, TAU); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(4, -7); ctx.lineTo(16, -3); ctx.stroke();
+    ell(r - 1, 5, 3.5, 3.5, '#ff8fa3', OUT);
+    ctx.fillStyle = '#fff'; ctx.fillRect(14, 10, 3, 5); ctx.strokeRect(14, 10, 3, 5);
   }
   ctx.restore();
+  // 冰冻效果
+  if (L.buffT.freeze > 0) {
+    ctx.lineWidth = 2;
+    ell(e.x, e.y - (e.type === 'boss' ? 8 : 0), r * 1.25, r * 1.25, 'rgba(160,230,255,.45)', 'rgba(255,255,255,.9)');
+  }
   // 血条
-  if (e.hp < e.maxHp || e.type === 'boss') {
-    const bw = e.type === 'boss' ? 90 : r * 2, by = e.y - r - (e.type === 'boss' ? 30 : 14);
+  const big = e.type === 'boss' || e.type === 'elite';
+  if (e.hp < e.maxHp || big) {
+    const bw = e.type === 'boss' ? 90 : e.type === 'elite' ? 56 : r * 2, by = e.y - r - (e.type === 'boss' ? 30 : e.type === 'elite' ? 26 : 14);
     ctx.fillStyle = OUT; ctx.fillRect(e.x - bw / 2 - 1, by - 1, bw + 2, 6);
-    ctx.fillStyle = e.type === 'boss' ? '#c8402d' : '#ff7a5c'; ctx.fillRect(e.x - bw / 2, by, bw * clamp(e.hp / e.maxHp, 0, 1), 4);
+    ctx.fillStyle = big ? '#c8402d' : '#ff7a5c'; ctx.fillRect(e.x - bw / 2, by, bw * clamp(e.hp / e.maxHp, 0, 1), 4);
   }
 }
 
@@ -1010,24 +1164,44 @@ function drawHUD() {
     ctx.drawImage(ICONS.canvas.catnip, 10, y - 13, 26, 26);
     outlined(`猫薄荷 ×${L.catnipLeft}${L.catnipT > 0 ? '（生效中）' : ''}`, 42, y, 14, '#c9ff9e', 'left'); y += 26;
   }
-  if (L.atkBuff > 0) outlined(`攻击力 +${Math.round(L.atkBuff * 100)}%`, 10, y, 14, '#ffe066', 'left');
+  if (L.atkBuff > 0) { outlined(`攻击力 +${Math.round(L.atkBuff * 100)}%`, 10, y, 14, '#ffe066', 'left'); y += 24; }
+  for (const b of BUFFS) {
+    const t = L.buffT[b.id];
+    if (!(t > 0)) continue;
+    ctx.lineWidth = 2; ell(22, y, 11, 11, b.color, OUT);
+    outlined(b.ch, 22, y + 1, 13);
+    outlined(`${b.name} ${Math.ceil(t)}秒`, 42, y, 14, '#fff', 'left');
+    y += 26;
+  }
   $('btnCatnip').disabled = L.catnipLeft <= 0 || L.catnipT > 0;
   $('btnCatnip').style.display = G.items.catnip ? '' : 'none';
 
-  if (L.banner > 0) {
+  if (L.banner > 0 && state !== 'clear') {
     ctx.globalAlpha = clamp(L.banner, 0, 1);
     outlined(`第 ${G.level} 关`, W / 2, H * 0.3, 46, '#ffe066');
     outlined(L.isBoss ? '头目关！准备回答问题' : '保卫猫窝！', W / 2, H * 0.3 + 44, 20);
     ctx.globalAlpha = 1;
   }
   // 头目方向提示
-  if (L.boss) {
-    const sx = (L.boss.x - cam.x) * scale, sy = (L.boss.y - cam.y) * scale;
+  if (state !== 'clear') for (const e of L.enemies) {
+    if (e.type !== 'boss' && e.type !== 'elite') continue;
+    const sx = (e.x - cam.x) * scale, sy = (e.y - cam.y) * scale;
     if (sx < 0 || sx > W || sy < 0 || sy > H) {
       const a = Math.atan2(sy - H / 2, sx - W / 2);
-      const px = clamp(W / 2 + Math.cos(a) * W, 30, W - 30), py = clamp(H / 2 + Math.sin(a) * H, 90, H - 30);
-      outlined('头目', px, py, 15, '#ff9a8a');
+      const px = clamp(W / 2 + Math.cos(a) * W, 36, W - 36), py = clamp(H / 2 + Math.sin(a) * H, 90, H - 30);
+      outlined(e.type === 'boss' ? '头目' : '小头目', px, py, 15, '#ff9a8a');
     }
+  }
+  if (L.notice) { ctx.globalAlpha = clamp(L.notice.t, 0, 1); outlined(L.notice.text, W / 2, H * 0.24, 26, '#ff9a8a'); ctx.globalAlpha = 1; }
+  // 过关庆祝
+  if (state === 'clear') {
+    const t = L.clearT, k = Math.min(1, t / 0.35), pop = 1 + 0.35 * Math.sin(k * Math.PI) * (1 - k * 0.3);
+    const size = Math.min(54, W / 8) * (0.3 + 0.7 * k) * pop;
+    outlined(`第 ${G.level} 关`, W / 2, H * 0.26, size * 0.6, '#fff');
+    outlined(L.isBoss ? '打败头目！' : '过关！', W / 2, H * 0.26 + size * 0.95, size, '#ffe066');
+    if (t > 0.8) { ctx.globalAlpha = clamp((t - 0.8) * 3, 0, 1); outlined(`过关奖励 +${G.lastBonus} 🐟`, W / 2, H * 0.26 + size * 1.9, 20, '#ffe9a8'); }
+    if (t > 1.4) { ctx.globalAlpha = 0.6 + 0.4 * Math.sin(t * 6); outlined('点击屏幕继续', W / 2, H * 0.82, 15, '#fff'); }
+    ctx.globalAlpha = 1;
   }
   // 摇杆
   if (joy.active) {
@@ -1053,6 +1227,7 @@ function render() {
   drawFence();
   if (!L) { drawNest(); ctx.restore(); return; }
   for (const f of L.fish) drawFish(f);
+  for (const d of L.drops) drawDrop(d);
   // 按 y 排序，产生前后遮挡
   const objs = [{ y: NEST.y + 30, draw: drawNest }, { y: L.cat.y, draw: () => drawCat(L.cat) }];
   for (const t of L.turrets) objs.push({ y: t.y, draw: () => drawTurret(t) });
@@ -1083,6 +1258,7 @@ function frame(now) {
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
   if (state === 'playing') update(dt);
+  else if (state === 'clear') updateClear(dt);
   render();
   requestAnimationFrame(frame);
 }

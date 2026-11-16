@@ -34,8 +34,20 @@ const ENEMIES = {
   roach:   { name: '飞奔蟑螂', hp: 9, spd: 135, r: 9, dmg: 4, fish: [1, 1], target: 'cat', from: 2, w: 4, group: 3 },
   raccoon: { name: '浣熊盗贼', hp: 70, spd: 44, r: 19, dmg: 8, fish: [4, 6], target: 'nest', from: 3, w: 2 },
   crow:    { name: '乌鸦投弹手', hp: 32, spd: 85, r: 14, dmg: 8, fish: [3, 4], target: 'cat', ranged: true, from: 4, w: 3 },
+  elite:   { name: '铁桶鼠队长', hp: 180, spd: 50, r: 24, dmg: 9, fish: [14, 18], target: 'nest' },
   boss:    { name: '野狗头目', hp: 520, spd: 34, r: 40, dmg: 14, fish: [40, 50], target: 'nest' },
 };
+
+// 战斗中随机掉落的增益。ch: 掉落物上显示的汉字；dur: 持续秒数（0 = 立刻生效）
+const BUFFS = [
+  { id: 'power', ch: '力', name: '力量', py: 'lìliàng', tip: '攻击力加倍', color: '#ff6b5e', dur: 8 },
+  { id: 'rapid', ch: '快', name: '快速', py: 'kuàisù', tip: '射击变快', color: '#ffa726', dur: 8 },
+  { id: 'shield', ch: '盾', name: '护盾', py: 'hùdùn', tip: '暂时不会受伤', color: '#5aa9ff', dur: 6 },
+  { id: 'freeze', ch: '冰', name: '冰冻', py: 'bīngdòng', tip: '敌人被冻住', color: '#45c4d8', dur: 4 },
+  { id: 'heal', ch: '心', name: '爱心', py: 'àixīn', tip: '恢复生命', color: '#ff7fa8', dur: 0 },
+  { id: 'magnet', ch: '吸', name: '吸引', py: 'xīyǐn', tip: '吸来所有小鱼干', color: '#a57cf5', dur: 0 },
+];
+const BUFF_DROP_CHANCE = 0.06;
 
 // ---------- 头目战：词语填空 ----------
 // s: 句子（____ 是空格）；opts: 第一个是正确答案，格式 "词|拼音"；py: 整句拼音；en: 英文意思
