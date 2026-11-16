@@ -54,6 +54,9 @@ button.plain { margin-top: 14px; background: none; border: none; text-decoration
 .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(215px, 1fr)); gap: 10px; }
 .card { background: #fff; border: 2px solid #4a3423; border-radius: 14px; padding: 10px 12px; display: flex; flex-direction: column; gap: 4px; }
 .card.equipped { background: #e4f6d4; }
+.card .hd { display: flex; align-items: center; gap: 10px; }
+.card .ic { width: 56px; height: 56px; flex: 0 0 auto; background: #fbe6bd; border-radius: 12px; padding: 3px; }
+.card.equipped .ic { background: #fff; }
 .card .nm { font-weight: 700; font-size: 17px; }
 .card .py { font-size: 12px; color: #a0704a; }
 .card .ds { font-size: 13px; opacity: .85; flex: 1; }

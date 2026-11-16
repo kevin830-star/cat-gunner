@@ -603,8 +603,9 @@ function nextMini() {
 }
 
 // ---------- 商店 ----------
-function card({ name, py, desc, lv, btns, equipped }) {
-  return `<div class="card${equipped ? ' equipped' : ''}"><div class="nm">${name}</div>${store.pinyin ? `<div class="py">${py}</div>` : ''}
+function card({ icon, name, py, desc, lv, btns, equipped }) {
+  return `<div class="card${equipped ? ' equipped' : ''}"><div class="hd"><img class="ic" src="${ICONS.url[icon]}" alt=""><div>
+    <div class="nm">${name}</div>${store.pinyin ? `<div class="py">${py}</div>` : ''}</div></div>
     <div class="ds">${desc}</div><div class="lv">${lv}</div><div class="row">${btns}</div></div>`;
 }
 const btn = (action, id, label, enabled = true) => `<button data-action="${action}" data-id="${id}" ${enabled ? '' : 'disabled'}>${label}</button>`;
@@ -627,22 +628,22 @@ function renderShop() {
       btns = (lv < WEAPON_MAX ? btn('upW', w.id, `升级 ${c} 🐟`, fish >= c) : btn('', '', '已满级', false))
         + btn('eqW', w.id, G.cur === w.id ? '使用中' : '装备', G.cur !== w.id);
     }
-    h += card({ name: w.name, py: w.py, desc: w.desc, lv: lvTxt, btns, equipped: G.cur === w.id });
+    h += card({ icon: w.id, name: w.name, py: w.py, desc: w.desc, lv: lvTxt, btns, equipped: G.cur === w.id });
   }
   h += '</div><h3>道具</h3><div class="cards">';
   for (const it of ITEMS) {
     const lv = G.items[it.id], c = itemCost(it, lv);
     const btns = lv < it.max ? btn('item', it.id, `${lv ? '升级' : '购买'} ${c} 🐟`, fish >= c) : btn('', '', '已满级', false);
-    h += card({ name: it.name, py: it.py, desc: it.desc, lv: lv ? `等级 ${lv}/${it.max}` : '未拥有', btns });
+    h += card({ icon: it.id, name: it.name, py: it.py, desc: it.desc, lv: lv ? `等级 ${lv}/${it.max}` : '未拥有', btns });
   }
   h += '</div><h3>强化</h3><div class="cards">';
   for (const s of STATS) {
     const lv = G.stats[s.id], c = statCost(lv);
     const btns = lv < s.max ? btn('stat', s.id, `强化 ${c} 🐟`, fish >= c) : btn('', '', '已满级', false);
-    h += card({ name: s.name, py: s.py, desc: s.desc, lv: `等级 ${lv}/${s.max}`, btns });
+    h += card({ icon: s.id, name: s.name, py: s.py, desc: s.desc, lv: `等级 ${lv}/${s.max}`, btns });
   }
   const hurt = G.nestHp < nestMaxHp();
-  h += card({ name: '修补猫窝', py: 'xiūbǔ māowō', desc: `恢复猫窝 ${REPAIR_HP} 点生命。`,
+  h += card({ icon: 'repair', name: '修补猫窝', py: 'xiūbǔ māowō', desc: `恢复猫窝 ${REPAIR_HP} 点生命。`,
     lv: `猫窝生命 ${Math.ceil(G.nestHp)}/${nestMaxHp()}`,
     btns: btn('repair', '', hurt ? `修补 ${REPAIR_COST} 🐟` : '不需要修补', hurt && fish >= REPAIR_COST) });
   const nextBoss = isBossLevel(G.level + 1);
@@ -961,8 +962,13 @@ function drawHUD() {
   // 武器与增益
   const w = weaponDef(G.cur);
   let y = 62;
-  outlined(`${w.name} Lv${G.weapons[w.id]}`, 10, y, 14, '#fff', 'left'); y += 20;
-  if (G.items.catnip) { outlined(`猫薄荷 ×${L.catnipLeft}${L.catnipT > 0 ? '（生效中）' : ''}`, 10, y, 14, '#c9ff9e', 'left'); y += 20; }
+  y += 4;
+  ctx.drawImage(ICONS.canvas[w.id], 8, y - 15, 30, 30);
+  outlined(`${w.name} Lv${G.weapons[w.id]}`, 42, y, 14, '#fff', 'left'); y += 28;
+  if (G.items.catnip) {
+    ctx.drawImage(ICONS.canvas.catnip, 10, y - 13, 26, 26);
+    outlined(`猫薄荷 ×${L.catnipLeft}${L.catnipT > 0 ? '（生效中）' : ''}`, 42, y, 14, '#c9ff9e', 'left'); y += 26;
+  }
   if (L.atkBuff > 0) outlined(`攻击力 +${Math.round(L.atkBuff * 100)}%`, 10, y, 14, '#ffe066', 'left');
   $('btnCatnip').disabled = L.catnipLeft <= 0 || L.catnipT > 0;
   $('btnCatnip').style.display = G.items.catnip ? '' : 'none';
