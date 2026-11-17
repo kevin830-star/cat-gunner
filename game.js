@@ -118,7 +118,7 @@ const ibEls = {};
   const bar = $('itemBar');
   const mk = (id, html, cls = '') => { const b = document.createElement('button'); b.className = 'ib ' + cls; b.dataset.ib = id; b.innerHTML = html; bar.appendChild(b); ibEls[id] = { el: b, sig: null }; };
   mk('weapon', '<img alt=""><span class="tierb"></span><span class="key">Q</span>', 'wb');
-  for (const it of ITEMS) mk(it.id, `<img src="${ICONS.url[it.id]}" alt=""><span class="cd"></span><span class="ct"></span>${it.manual ? '<span class="key">空格</span>' : ''}`);
+  for (const it of ITEMS) mk(it.id, `<img src="${ICONS.url[it.id]}" alt=""><span class="cd"></span><span class="ct"></span>${it.manual ? '<span class="key">空格</span>' : ''}${it.multi ? '<span class="num"></span>' : ''}`);
   bar.addEventListener('pointerdown', e => {
     const b = e.target.closest('.ib');
     if (!b || state !== 'playing') return;
@@ -146,6 +146,9 @@ const tierColor = t => t >= 5 ? `hsl(${Math.floor(performance.now() / 6) % 360} 
 const ilv = id => (L && L.on && L.on[id]) || 0;   // 本关生效中的道具强度（0 = 没有生效）
 const fenceSlow = () => 0.2 + 0.1 * ilv('fence');
 const itemUpCost = (it, lv) => Math.round(it.cost * 1.5 * lv);
+// 可以同时拥有多个的道具（炮塔、飞镖）：units 里每一项是一座/一枚还能用几关
+const itemLeft = id => itemDef(id).multi ? Math.max(0, ...G.items[id].units) : G.items[id].uses;
+const itemPow = id => 1 + 0.35 * (G.items[id].lv - 1);   // 升级带来的伤害倍数
 const tierBadge = (t, cls = '') => `<span class="tier t${t} ${cls}" style="--tc:${TIERS[t].color}">${TIERS[t].id}</span>`;
 
 // 某把武器在某个品级下的实际数值
@@ -212,7 +215,7 @@ const freshRun = () => {
   return {
     level: 1, fish: 0, kills: 0,
     inv, eq: { id: 'pistol', tier: 0 },
-    items: Object.fromEntries(ITEMS.map(it => [it.id, { uses: 0, lv: 1 }])),
+    items: Object.fromEntries(ITEMS.map(it => [it.id, it.multi ? { uses: 0, lv: 1, units: [] } : { uses: 0, lv: 1 }])),
     stats: { catHp: 0, catSpd: 0, nestHp: 0 },
     nestHp: 300, miniPlayed: false, lastBonus: 0, seen: {}, stars: {}, lastStars: 0, lastStarBonus: 0, lastCatLoss: 0, lastNestLoss: 0,
   };
@@ -243,6 +246,15 @@ function loadRun() {
     // 道具：新存档是 {uses, lv}；旧存档是一个数字（永久拥有），转成 3 次使用次数
     for (const it of ITEMS) {
       const v = d.items && d.items[it.id];
+      if (it.multi) {
+        // 旧存档里炮塔/飞镖的等级代表数量（等级 + 1），转成同样数量的炮塔/飞镖
+        let units = [], lv = 1;
+        if (v && Array.isArray(v.units)) { units = v.units.map(u => clamp(Math.floor(u) || 0, 0, ITEM_CAP)).filter(u => u > 0).slice(0, it.multi); lv = clamp(Math.floor(v.lv) || 1, 1, it.max); }
+        else if (typeof v === 'number') { if (v > 0) units = Array(Math.min(it.multi, v + 1)).fill(3); }
+        else if (v && typeof v === 'object' && v.uses > 0) units = Array(Math.min(it.multi, (Math.floor(v.lv) || 1) + 1)).fill(clamp(Math.floor(v.uses), 1, ITEM_CAP));
+        run.items[it.id] = { uses: 0, lv, units };
+        continue;
+      }
       if (typeof v === 'number') { if (v > 0) run.items[it.id] = { uses: 3, lv: clamp(Math.floor(v), 1, it.max) }; }
       else if (v && typeof v === 'object') run.items[it.id] = { uses: clamp(Math.floor(v.uses) || 0, 0, ITEM_CAP), lv: clamp(Math.floor(v.lv) || 1, 1, it.max) };
     }
@@ -296,9 +308,12 @@ function startLevel() {
   // 道具：每关开始时消耗 1 次使用次数，用完就不再生效
   for (const it of ITEMS) {
     const st = G.items[it.id];
-    if (!it.manual && st.uses > 0) { st.uses--; L.on[it.id] = st.lv; }
+    if (it.multi) {   // 每座炮塔/每枚飞镖各用掉 1 关
+      if (!Array.isArray(st.units)) { st.units = st.uses > 0 ? Array(Math.min(it.multi, (st.lv || 1) + 1)).fill(st.uses) : []; st.uses = 0; st.lv = 1; }
+      if (st.units.length) { L.on[it.id] = st.units.length; st.units = st.units.map(u => u - 1).filter(u => u > 0); }
+    } else if (!it.manual && st.uses > 0) { st.uses--; L.on[it.id] = st.lv; }
   }
-  for (let i = 0; i < (ilv('turret') ? ilv('turret') + 1 : 0); i++) {
+  for (let i = 0; i < ilv('turret'); i++) {
     const a = Math.PI / 4 + i * Math.PI / 2;
     L.turrets.push({ x: NEST.x + Math.cos(a) * 82, y: NEST.y + Math.sin(a) * 82, cd: rand(0, 0.5), aim: a });
   }
@@ -332,6 +347,7 @@ function pressItem(id) {
     if (st.uses <= 0) return toast(`${it.name}用完了，去商店补充`);
     return useCatnip();
   }
+  if (it.multi) return toast(st.units.length ? `${it.name} ${ilv(id)} ${it.unit}生效中，下一关还剩 ${st.units.length} ${it.unit}` : `${it.name}本关是最后一次，去商店补充`);
   toast(st.uses > 0 ? `${it.name}已自动生效，还剩 ${st.uses} 次（每关用 1 次）` : `${it.name}本关生效，已是最后一次，去商店补充`);
 }
 function useCatnip() {
@@ -858,14 +874,14 @@ const SHURIKEN_R = 128;
 function updateGadgets(dt) {
   const c = L.cat, lv = G.level;
   if (ilv('shuriken')) {
-    const nSh = ilv('shuriken') + 1;
-    L.shAngle += dt * 3.2;
+    const nSh = ilv('shuriken');
+    L.shAngle += dt * 3.2 * (1 + 0.12 * (G.items.shuriken.lv - 1));
     for (const e of L.enemies) e.shCd = (e.shCd || 0) - dt;
     for (let i = 0; i < nSh; i++) {
       const a = L.shAngle + i * TAU / nSh, bx = NEST.x + Math.cos(a) * SHURIKEN_R, by = NEST.y + Math.sin(a) * SHURIKEN_R;
       for (const e of L.enemies) {
         if (e.dead || e.shCd > 0 || Math.hypot(e.x - bx, e.y - by) > e.r + 22) continue;
-        e.shCd = 0.35; damageEnemy(e, 16 + 3 * lv);
+        e.shCd = 0.35; damageEnemy(e, (16 + 3 * lv) * itemPow('shuriken'));
         burst(bx, by, '#dfe8f2', 4, 140); sfx.shuriken();
       }
     }
@@ -1062,8 +1078,8 @@ function update(dt) {
     if (e) {
       t.aim = Math.atan2(e.y - t.y, e.x - t.x);
       if (t.cd <= 0) {
-        t.cd = 0.7; sfx.turret();
-        L.bullets.push({ x: t.x, y: t.y, vx: Math.cos(t.aim) * 520, vy: Math.sin(t.aim) * 520, dmg: 9 + G.level, life: 0.7, r: 4, pierce: 0, explode: 0, color: '#ffd84a', kind: 'turret', hit: new Set() });
+        t.cd = 0.7 * (1 - 0.1 * (G.items.turret.lv - 1)); sfx.turret();
+        L.bullets.push({ x: t.x, y: t.y, vx: Math.cos(t.aim) * 520, vy: Math.sin(t.aim) * 520, dmg: (9 + G.level) * itemPow('turret'), life: 0.7, r: 4, pierce: 0, explode: 0, color: '#ffd84a', kind: 'turret', hit: new Set() });
       }
     }
   }
@@ -1372,8 +1388,16 @@ function renderShop() {
   h += '</div><h3>道具（有使用次数，用完就消失）</h3><div class="cards">';
   for (const it of ITEMS) {
     const st = G.items[it.id], upC = itemUpCost(it, st.lv);
-    const btns = btn('buyI', it.id, `+${it.pack} 次 ${it.cost} 🐟`, fish >= it.cost && st.uses < ITEM_CAP)
-      + (st.lv < it.max ? btn('upI', it.id, `升级 ${upC} 🐟`, fish >= upC) : btn('', '', '强度已满', false));
+    const up = st.lv < it.max ? btn('upI', it.id, `升级 ${upC} 🐟`, fish >= upC) : btn('', '', '强度已满', false);
+    if (it.multi) {
+      // 没满就多买一座/一枚；满了就给剩余关数最少的那个补充
+      const full = st.units.length >= it.multi, canTop = st.units.some(u => u < ITEM_CAP);
+      const buy = btn('buyI', it.id, full ? `补充 +${it.pack} 关 ${it.cost} 🐟` : `+1 ${it.unit} ${it.cost} 🐟`, fish >= it.cost && (!full || canTop));
+      const have = st.units.length ? `已有 <b>${st.units.length}/${it.multi}</b> ${it.unit}，各剩 ${st.units.join('/')} 关` : `还没有（最多 ${it.multi} ${it.unit}）`;
+      h += card({ icon: it.id, name: it.name, py: it.py, desc: it.desc, lv: `${have}<br>强度 ${st.lv}/${it.max}：${it.eff(st.lv)}`, btns: buy + up });
+      continue;
+    }
+    const btns = btn('buyI', it.id, `+${it.pack} 次 ${it.cost} 🐟`, fish >= it.cost && st.uses < ITEM_CAP) + up;
     h += card({ icon: it.id, name: it.name, py: it.py, desc: it.desc, lv: `剩余 <b>${st.uses}</b> 次　强度 ${st.lv}/${it.max}：${it.eff(st.lv)}`, btns });
   }
   h += '</div><h3>强化</h3><div class="cards">';
@@ -1417,7 +1441,13 @@ function shopAction(action, id) {
     if (G.inv[wid] && mergeWeapon(wid, +t)) { fixEquip(); showMerge(wid, +t, +t + 1); }
   }
   else if (action === 'mergeAll') { const top = mergeAll(); if (top) showMerge(top.id, top.from, top.to); }
-  else if (action === 'buyI') { const it = itemDef(id), st = G.items[id]; if (st.uses < ITEM_CAP && pay(it.cost)) st.uses = Math.min(ITEM_CAP, st.uses + it.pack); }
+  else if (action === 'buyI') {
+    const it = itemDef(id), st = G.items[id];
+    if (it.multi) {
+      if (st.units.length < it.multi) { if (pay(it.cost)) st.units.push(it.pack); }
+      else { const i = st.units.indexOf(Math.min(...st.units)); if (st.units[i] < ITEM_CAP && pay(it.cost)) st.units[i] = Math.min(ITEM_CAP, st.units[i] + it.pack); }
+    } else if (st.uses < ITEM_CAP && pay(it.cost)) st.uses = Math.min(ITEM_CAP, st.uses + it.pack);
+  }
   else if (action === 'upI') { const it = itemDef(id), st = G.items[id]; if (st.lv < it.max && pay(itemUpCost(it, st.lv))) st.lv++; }
   else if (action === 'stat') {
     const s = STATS.find(x => x.id === id), lv = G.stats[id];
@@ -1553,7 +1583,7 @@ function drawHelper(h) {
 }
 function drawGadgets() {
   if (ilv('shuriken')) {
-    const nSh = ilv('shuriken') + 1;
+    const nSh = ilv('shuriken');
     for (let i = 0; i < nSh; i++) {
       const a = L.shAngle + i * TAU / nSh, bx = NEST.x + Math.cos(a) * SHURIKEN_R, by = NEST.y + Math.sin(a) * SHURIKEN_R;
       // 拖尾
@@ -2073,13 +2103,15 @@ function updateItemBar() {
   }
   for (const it of ITEMS) {
     const x = ibEls[it.id], st = G.items[it.id], on = L.on[it.id] || 0, cool = it.manual ? Math.ceil(Math.max(0, L.catnipT)) : 0;
+    const left = itemLeft(it.id);
     const show = it.manual ? (st.uses > 0 || cool > 0) : on > 0;
-    const sig = `${show}|${st.uses}|${on}|${cool}`;
+    const sig = `${show}|${left}|${on}|${cool}`;
     if (x.sig === sig) continue;
     x.sig = sig;
     x.el.style.display = show ? '' : 'none';
     const ct = x.el.querySelector('.ct');
-    ct.textContent = `×${st.uses}`; ct.classList.toggle('zero', st.uses === 0);
+    ct.textContent = `×${left}`; ct.classList.toggle('zero', left === 0);
+    const num = x.el.querySelector('.num'); if (num) num.textContent = on > 1 ? on + it.unit : '';
     x.el.classList.toggle('on', it.manual ? cool > 0 : on > 0);
     const cd = x.el.querySelector('.cd');
     cd.textContent = cool > 0 ? cool + '秒' : ''; cd.style.display = cool > 0 ? 'flex' : 'none';

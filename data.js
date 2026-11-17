@@ -34,10 +34,10 @@ const MERGE_NEED = [2, 2, 2, 3, 3];
 const ITEM_CAP = 9;
 const ITEMS = [
   { id: 'catnip', name: '猫薄荷', py: 'māo bòhe', desc: '手动使用（空格键或按钮）：一段时间内移动和射击都变快。每用一次消耗 1 次。', manual: true, pack: 3, cost: 45, max: 3, eff: lv => `持续 ${5 + 2 * lv} 秒` },
-  { id: 'turret', name: '自动炮塔', py: 'zìdòng pàotǎ', desc: '每关开始时在猫窝旁架起炮塔自动射击。每关消耗 1 次。', pack: 3, cost: 90, max: 3, eff: lv => `${lv + 1} 座炮塔` },
+  { id: 'turret', name: '自动炮塔', py: 'zìdòng pàotǎ', desc: '在猫窝旁自动射击。每买一次多一座（最多同时 4 座），每座能用 3 关。升级会让所有炮塔更强。', multi: 4, unit: '座', pack: 3, cost: 70, max: 3, eff: lv => lv === 1 ? '基础强度' : `伤害 +${35 * (lv - 1)}%，射速 +${Math.round(100 / (1 - 0.1 * (lv - 1)) - 100)}%` },
   { id: 'fence', name: '铁丝围栏', py: 'tiěsī wéilán', desc: '每关开始时围住猫窝，靠近的敌人会变慢。每关消耗 1 次。', pack: 3, cost: 60, max: 3, eff: lv => `减速 ${20 + 10 * lv}%` },
   { id: 'magnet', name: '磁铁项圈', py: 'cítiě xiàngquān', desc: '每关开始时戴上，从更远的地方吸来小鱼干。每关消耗 1 次。', pack: 3, cost: 40, max: 3, eff: lv => `吸取范围 ${60 + 55 * lv}` },
-  { id: 'shuriken', name: '旋转飞镖', py: 'xuánzhuǎn fēibiāo', desc: '每关开始时绕着猫窝高速旋转，切碎靠近的敌人。每关消耗 1 次。', pack: 2, cost: 110, max: 3, eff: lv => `${lv + 1} 枚飞镖` },
+  { id: 'shuriken', name: '旋转飞镖', py: 'xuánzhuǎn fēibiāo', desc: '绕着猫窝高速旋转，切碎靠近的敌人。每买一次多一枚（最多同时 4 枚），每枚能用 2 关。升级会让所有飞镖更强。', multi: 4, unit: '枚', pack: 2, cost: 80, max: 3, eff: lv => lv === 1 ? '基础强度' : `伤害 +${35 * (lv - 1)}%，转速 +${12 * (lv - 1)}%` },
   { id: 'lightning', name: '闪电云', py: 'shǎndiàn yún', desc: '每关开始时在猫窝上空聚起雷云，定时劈中附近的敌人。每关消耗 1 次。', pack: 2, cost: 130, max: 3, eff: lv => `每次劈 ${lv + 1} 个敌人` },
   { id: 'helper', name: '小猫助手', py: 'xiǎomāo zhùshǒu', desc: '每关开始时请来小猫，跟着你一起开枪。每关消耗 1 次。', pack: 2, cost: 140, max: 2, eff: lv => `${lv} 只小猫` },
 ];

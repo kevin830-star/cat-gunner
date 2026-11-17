@@ -168,3 +168,6 @@ button.plain { margin-top: 14px; background: none; border: none; text-decoration
 .mfbox .sub { font-size: 16px; margin-top: 8px; text-shadow: 0 2px 0 #4a3423; }
 @keyframes mfpop { 0% { transform: scale(.2); opacity: 0; } 100% { transform: scale(1); opacity: 1; } }
 @keyframes mfspin { to { transform: rotate(360deg); } }
+
+.ib .num { position: absolute; left: -6px; top: -8px; padding: 0 4px; border: 1.5px solid #4a3423; border-radius: 6px; background: #ffe066; font: 700 11px/15px system-ui, sans-serif; pointer-events: none; }
+.ib .num:empty { display: none; }
