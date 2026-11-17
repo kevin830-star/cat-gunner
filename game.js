@@ -1646,7 +1646,7 @@ function reviveFromExam() {
 }
 
 // ---------- 商店里的汉字小游戏 ----------
-// 小游戏的六种题型：每轮 5 题，每题都是不同的题型；每关轮流空出一种，所以连续几关会练到全部题型
+// 小游戏的六种题型：每轮 6 题，每种题型各一题，顺序随机
 const MINI_TYPES = [
   { id: 'pic', name: '看图选字', tip: '看图片，选出正确的字。' },
   { id: 'comp', name: '偏旁拼字', tip: '两个部分合起来是哪个字？' },
@@ -1657,8 +1657,7 @@ const MINI_TYPES = [
 ];
 const miniTypeDef = id => MINI_TYPES.find(t => t.id === id);
 function miniRound() {
-  const skip = MINI_TYPES[G.level % MINI_TYPES.length].id;
-  return shuffle(MINI_TYPES.filter(t => t.id !== skip)).map(t => t.id).slice(0, MINI_TOTAL);
+  return shuffle(MINI_TYPES).map(t => t.id);
 }
 const TONES = { a: 'āáǎà', e: 'ēéěè', i: 'īíǐì', o: 'ōóǒò', u: 'ūúǔù', 'ü': 'ǖǘǚǜ' };
 function toneVariants(py) {
@@ -1668,7 +1667,7 @@ function toneVariants(py) {
   return null;
 }
 const miniReward = () => 12 + 3 * G.level;
-const MINI_TOTAL = 5, MINI_PERFECT = 25;   // 每次 5 题；全对额外奖励
+const MINI_TOTAL = 6, MINI_PERFECT = 30;   // 每次 6 题（每种题型一题）；全对额外奖励
 let mini = null;
 function makeMiniQuestion(type) {
   if (type === 'pic') {
@@ -1773,7 +1772,7 @@ function renderShop() {
   let h = `<div class="shophead"><h2>第 ${G.level} 关完成！<span class="stars">${starRow(G.lastStars)}</span></h2>
     <div class="fishbar">🐟 ${fish}</div></div>
     <div style="font-size:13px;margin:2px 0 8px">过关奖励 +${G.lastBonus}${G.lastStarBonus ? `, 星级奖励 +${G.lastStarBonus}` : ''} 🐟 · 累计 ★ ${totalStars} · 下一关开始猫咪生命自动回满 (${catMaxHp()} HP)</div>
-    <div class="minicard"><div class="txt"><b>汉字小游戏 · 综合练习</b><br>${MINI_TOTAL} 道不同题型（识字、偏旁、词语、成语、读音、古诗轮流），每答对一题 +${miniReward()} 🐟，全对再 +${MINI_PERFECT} 🐟。</div>${btn('mini', '', G.miniPlayed ? '已玩过' : '开始', !G.miniPlayed)}</div>`;
+    <div class="minicard"><div class="txt"><b>汉字小游戏 · 综合练习</b><br>${MINI_TOTAL} 道题，识字、偏旁、词语、成语、读音、古诗各一题，每答对一题 +${miniReward()} 🐟，全对再 +${MINI_PERFECT} 🐟。</div>${btn('mini', '', G.miniPlayed ? '已玩过' : '开始', !G.miniPlayed)}</div>`;
 
   // 武器库
   const own = ownedList(), canMerge = own.some(o => o.tier < TIERS.length - 1 && o.n >= MERGE_NEED[o.tier]);
