@@ -104,3 +104,46 @@ button.plain { margin-top: 14px; background: none; border: none; text-decoration
 }
 
 #btnStart.tgl { margin-top: 14px; font-size: 15px; padding: 8px 18px; }
+
+/* 武器品级徽章 */
+.tier {
+  display: inline-block; min-width: 1.6em; padding: 0 6px; border: 2px solid #4a3423; border-radius: 8px;
+  font-weight: 900; font-size: 14px; line-height: 1.4; text-align: center; color: #fff; background: var(--tc, #a8794a);
+  text-shadow: 0 1px 0 rgba(0,0,0,.45);
+}
+.tier.t5 { background: linear-gradient(100deg, #ff5e5e, #ffd84a, #6fe06f, #4fc3ff, #b48cff); }
+.tier.big { font-size: 34px; padding: 0 16px; border-width: 4px; border-radius: 14px; }
+.wgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+.wcell { background: #fff; border: 3px solid var(--tc, #a8794a); border-radius: 14px; padding: 8px; display: flex; flex-direction: column; gap: 4px; position: relative; }
+.wcell.t5 { border-color: #ff9ad0; box-shadow: 0 0 0 2px #ffe066 inset; }
+.wcell.equipped { background: #e4f6d4; }
+.wcell .top { display: flex; align-items: center; justify-content: space-between; }
+.wcell .wi { width: 52px; height: 52px; background: #fbe6bd; border-radius: 10px; padding: 3px; }
+.wcell .cnt { font-weight: 900; font-size: 18px; }
+.wcell .wn { font-weight: 700; font-size: 14px; }
+.wcell .ws { font-size: 12px; color: #a0704a; line-height: 1.4; }
+.wcell .row { display: flex; gap: 6px; margin-top: auto; }
+.wcell button { flex: 1; padding: 6px 4px; font-size: 13px; font-weight: 700; cursor: pointer; background: #ffd27a; border: 2px solid #4a3423; border-radius: 10px; }
+.wcell button.merge { background: #9be37a; }
+.wcell button:disabled { background: #e6ddcc; opacity: .6; cursor: default; }
+.wtools { display: flex; align-items: center; gap: 10px; margin: 8px 0; flex-wrap: wrap; font-size: 13px; }
+.wtools button { padding: 7px 14px; font-weight: 700; font-size: 14px; cursor: pointer; background: #9be37a; border: 2px solid #4a3423; border-radius: 10px; }
+.wtools button:disabled { background: #e6ddcc; opacity: .6; cursor: default; }
+.stars { font-size: 20px; color: #f5b300; letter-spacing: 2px; }
+.stars .off { color: #cdbb97; }
+
+/* 合成成功动画 */
+.mergefx { position: fixed; inset: 0; z-index: 30; display: none; align-items: center; justify-content: center; background: rgba(30, 12, 0, .68); cursor: pointer; }
+.mergefx.show { display: flex; }
+.mfbox { position: relative; text-align: center; color: #fff; animation: mfpop .55s cubic-bezier(.2, 1.7, .4, 1); }
+.mfrays { position: absolute; left: 50%; top: 50%; width: 560px; height: 560px; margin: -280px 0 0 -280px; border-radius: 50%;
+  background: repeating-conic-gradient(rgba(255, 226, 120, .6) 0 9deg, transparent 9deg 18deg);
+  -webkit-mask-image: radial-gradient(circle, #000 18%, transparent 68%); mask-image: radial-gradient(circle, #000 18%, transparent 68%);
+  animation: mfspin 7s linear infinite; }
+.mfbox > * { position: relative; }
+.mfbox .mfrays { position: absolute; }
+.mfbox img { width: 150px; height: 150px; filter: drop-shadow(0 0 16px rgba(255, 220, 90, .95)); }
+.mfbox .ttl { font-size: 26px; font-weight: 900; text-shadow: 0 3px 0 #4a3423, 0 0 12px #ffb300; margin-bottom: 4px; }
+.mfbox .sub { font-size: 16px; margin-top: 8px; text-shadow: 0 2px 0 #4a3423; }
+@keyframes mfpop { 0% { transform: scale(.2); opacity: 0; } 100% { transform: scale(1); opacity: 1; } }
+@keyframes mfspin { to { transform: rotate(360deg); } }

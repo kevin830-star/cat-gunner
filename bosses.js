@@ -11,6 +11,7 @@ const BOSSES = [
   { id: 'tiger', name: '老虎', py: 'lǎohǔ', r: 40, hp: 1.2, spd: 42, special: 'pounce', cd: 4.5, tip: '高高跳起扑向猫咪' },
   { id: 'lion', name: '狮子', py: 'shīzi', r: 44, hp: 1.4, spd: 36, special: 'roar', cd: 6, tip: '吼声把猫咪震飞' },
   { id: 'rhino', name: '犀牛', py: 'xīniú', r: 48, hp: 1.7, spd: 30, special: 'charge', cd: 5, tip: '直线冲撞，快躲开' },
+  { id: 'dragon', name: '巨龙', py: 'jùlóng', r: 62, hp: 1.8, spd: 28, special: 'dragon', cd: 3.2, tip: '喷火扫射，召唤陨石雨', barY: 122 },
 ];
 
 // 画法：坐标以身体中心为原点、朝右，按 r = 40 的大小绘制
@@ -201,6 +202,43 @@ const BOSS_ART = (() => {
         P([13, -8, 36, -36, 25, 3], '#f1ead9'); P([3, -13, 9, -27, 14, -11], '#f1ead9');
         E(18, 6, 2, 2.5, OUT, false);
         eyes(-8, -4, 12, p, 3.5, '#3d2a1a'); mouth(10, 11, 7, p, false);
+      });
+    },
+    dragon(p) {
+      const red = '#d9413b', dk = '#9c2a3a', belly = '#f7d27f', wingC = '#b8323f', bone = '#f1ead9';
+      const flap = p.wing !== undefined ? p.wing : Math.sin(p.t * 5) * 0.5;
+      const wing = (rot, col2) => {
+        g.save(); g.translate(-10, -14); g.rotate(rot);
+        P([0, 0, -14, -50, 6, -38, 20, -66, 32, -34, 54, -50, 44, -6, 16, 10], col2);
+        L([0, 0, 6, -38], OUT, 2.5); L([0, 0, 32, -34], OUT, 2.5); L([0, 0, 44, -6], OUT, 2.5);
+        g.restore();
+      };
+      wing(-0.35 + flap * 0.9, dk);                       // 远处的翅膀
+      curve(-30, 12, -62, 26, -74, 0 + wag(p), red, 10);  // 尾巴
+      P([-70, -2 + wag(p), -88, -10 + wag(p), -78, 8 + wag(p)], dk);   // 尾尖
+      legs(p, dk, 8, 30);
+      E(0, 6, 40, 28, red);
+      E(8, 14, 25, 16, belly, false);
+      for (const x of [-2, 6, 14, 22]) L([x, 6, x + 4, 22], '#d9a24f', 2);
+      for (const x of [-28, -16, -4, 8, 20]) P([x - 6, -17, x, -31, x + 6, -17], dk);   // 背刺
+      wing(-0.15 + flap, wingC);                          // 近处的翅膀
+      head(34, -18, p, () => {
+        P([-8, -14, -20, -42, 4, -20], bone); P([6, -16, 6, -44, 18, -18], bone);   // 犄角
+        E(0, 0, 22, 19, red);
+        const o = p.mouth || 0;
+        E(15, 7 + o * 1, 18, 11, red);                    // 上颚
+        E(8, -6, 4, 3, dk, false); E(22, -1, 2.2, 2.2, OUT, false);   // 鼻孔
+        // 下颚张开
+        g.save(); g.translate(8, 12); g.rotate(o * 0.5);
+        E(8, 2, 15, 6, dk);
+        g.restore();
+        if (o > 0.15) { g.save(); g.lineWidth = 2; E(18, 13 + o * 3, 11, 3 + o * 6, '#7a1f1f'); E(26 + o * 6, 13, 7 + o * 6, 5 + o * 4, 'rgba(255,190,60,.85)', false); g.restore(); }
+        g.save(); g.lineWidth = 1.5;
+        P([13, 13, 16, 20, 19, 13], '#fff'); P([22, 13, 25, 19, 28, 13], '#fff');
+        g.restore();
+        g.save(); g.lineWidth = 2; E(-1, -6, 6, 6, '#ffe066'); g.restore();
+        E(0, -6, 1.8, 5, fl ? '#fff' : OUT, false);
+        L([-9, -16, 6, -9], OUT, 3.5);
       });
     },
   };

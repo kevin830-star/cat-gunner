@@ -1,28 +1,45 @@
 // 游戏数据：武器、道具、敌人，以及中文学习题库
 'use strict';
 
+// ---------- 武器 ----------
+// cost：购买一把 D 级的价格；splash: [从第几阶开始, 起始半径, 每阶增加] 命中后的溅射范围
 const WEAPONS = [
-  { id: 'pistol', name: '豌豆手枪', py: 'wāndòu shǒuqiāng', desc: '可靠的初始武器。', cost: 0,
-    dmg: 14, interval: 0.36, speed: 560, count: 1, spread: 0, jitter: 0.03, pierce: 0, explode: 0, life: 0.9, r: 5, color: '#6fd24a' },
-  { id: 'shotgun', name: '毛线散弹枪', py: 'máoxiàn sǎndànqiāng', desc: '一次打出五颗毛线球，近战很强。', cost: 90,
-    dmg: 9, interval: 0.75, speed: 480, count: 5, spread: 0.55, jitter: 0, pierce: 0, explode: 0, life: 0.45, r: 6, color: '#ff8fb1' },
-  { id: 'smg', name: '鱼骨冲锋枪', py: 'yúgǔ chōngfēngqiāng', desc: '射速非常快，单发伤害低。', cost: 160,
-    dmg: 7, interval: 0.11, speed: 640, count: 1, spread: 0, jitter: 0.12, pierce: 0, explode: 0, life: 0.75, r: 4, color: '#f4f4f4' },
-  { id: 'grenade', name: '罐头榴弹炮', py: 'guàntou liúdànpào', desc: '罐头落地爆炸，伤害一大片。', cost: 260,
+  { id: 'pistol', name: '豌豆手枪', py: 'wāndòu shǒuqiāng', desc: '可靠的基础武器，命中时炸开豌豆汁。C 级起有溅射。', cost: 30,
+    dmg: 14, interval: 0.36, speed: 560, count: 1, spread: 0, jitter: 0.03, pierce: 0, explode: 0, life: 0.9, r: 5, color: '#6fd24a', splash: [1, 26, 9] },
+  { id: 'shotgun', name: '毛线散弹枪', py: 'máoxiàn sǎndànqiāng', desc: '打出一扇毛线球，每升一阶多一颗，覆盖更广。B 级起有溅射。', cost: 90,
+    dmg: 9, interval: 0.75, speed: 480, count: 5, spread: 0.55, jitter: 0, pierce: 0, explode: 0, life: 0.45, r: 6, color: '#ff8fb1', splash: [2, 24, 8] },
+  { id: 'smg', name: '鱼骨冲锋枪', py: 'yúgǔ chōngfēngqiāng', desc: '射速非常快，单发伤害低。A 级起有溅射。', cost: 160,
+    dmg: 7, interval: 0.11, speed: 640, count: 1, spread: 0, jitter: 0.12, pierce: 0, explode: 0, life: 0.75, r: 4, color: '#f4f4f4', splash: [3, 20, 8] },
+  { id: 'grenade', name: '罐头榴弹炮', py: 'guàntou liúdànpào', desc: '罐头落地爆炸，范围随品级变大。', cost: 260,
     dmg: 42, interval: 1.0, speed: 380, count: 1, spread: 0, jitter: 0.02, pierce: 0, explode: 85, life: 0.85, r: 8, color: '#c9a35a' },
-  { id: 'laser', name: '激光逗猫笔', py: 'jīguāng dòumāobǐ', desc: '激光穿透一整排敌人。', cost: 380,
+  { id: 'laser', name: '激光逗猫笔', py: 'jīguāng dòumāobǐ', desc: '激光穿透一整排敌人，品级越高光束越粗。', cost: 380,
     dmg: 22, interval: 0.5, speed: 950, count: 1, spread: 0, jitter: 0, pierce: 99, explode: 0, life: 0.6, r: 5, color: '#ff4040' },
 ];
-const WEAPON_MAX = 5;
 
+// ---------- 品级与合成 ----------
+// dmg / spd：伤害和射击间隔的倍数；need：合成成下一阶需要几把相同的武器（第 i 项 = 把 i 阶合成 i+1 阶）
+const TIERS = [
+  { id: 'D', name: '普通', color: '#a8794a', dmg: 1, spd: 1 },
+  { id: 'C', name: '优秀', color: '#4fb83c', dmg: 2.2, spd: 0.94 },
+  { id: 'B', name: '精良', color: '#3d8bff', dmg: 4.8, spd: 0.88 },
+  { id: 'A', name: '史诗', color: '#a45cf0', dmg: 10.5, spd: 0.82 },
+  { id: 'S', name: '传说', color: '#ffb300', dmg: 25, spd: 0.76 },
+  { id: 'SSS', name: '神话', color: '#ff5e9a', dmg: 62, spd: 0.68 },
+];
+const MERGE_NEED = [2, 2, 2, 3, 3];
+
+// ---------- 道具 ----------
+// pack：一次购买得到的使用次数；除猫薄荷外，每关开始时自动消耗 1 次；次数用完后效果消失，需要再买
+// lv：强度，花钱升级后一直保留；eff(lv)：当前强度下的效果说明
+const ITEM_CAP = 9;
 const ITEMS = [
-  { id: 'catnip', name: '猫薄荷', py: 'māo bòhe', desc: '每关可用几次：6 秒内移动和射击都变快。等级 = 每关次数。', cost: 60, max: 3 },
-  { id: 'turret', name: '自动炮塔', py: 'zìdòng pàotǎ', desc: '在猫窝旁边自动射击。等级 = 炮塔数量。', cost: 120, max: 4 },
-  { id: 'fence', name: '铁丝围栏', py: 'tiěsī wéilán', desc: '靠近猫窝的敌人会变慢。每级减速 15%。', cost: 80, max: 3 },
-  { id: 'magnet', name: '磁铁项圈', py: 'cítiě xiàngquān', desc: '从更远的地方吸来小鱼干。', cost: 50, max: 3 },
-  { id: 'shuriken', name: '旋转飞镖', py: 'xuánzhuǎn fēibiāo', desc: '绕着猫窝高速旋转，切碎靠近的敌人。等级 = 飞镖数量。', cost: 150, max: 3 },
-  { id: 'lightning', name: '闪电云', py: 'shǎndiàn yún', desc: '猫窝上空的雷云，定时劈中附近的敌人。等级越高劈得越多越快。', cost: 180, max: 3 },
-  { id: 'helper', name: '小猫助手', py: 'xiǎomāo zhùshǒu', desc: '跟着你一起开枪的小猫。等级 = 小猫数量。', cost: 200, max: 2 },
+  { id: 'catnip', name: '猫薄荷', py: 'māo bòhe', desc: '手动使用（空格键或按钮）：一段时间内移动和射击都变快。每用一次消耗 1 次。', manual: true, pack: 3, cost: 45, max: 3, eff: lv => `持续 ${5 + 2 * lv} 秒` },
+  { id: 'turret', name: '自动炮塔', py: 'zìdòng pàotǎ', desc: '每关开始时在猫窝旁架起炮塔自动射击。每关消耗 1 次。', pack: 3, cost: 90, max: 3, eff: lv => `${lv + 1} 座炮塔` },
+  { id: 'fence', name: '铁丝围栏', py: 'tiěsī wéilán', desc: '每关开始时围住猫窝，靠近的敌人会变慢。每关消耗 1 次。', pack: 3, cost: 60, max: 3, eff: lv => `减速 ${20 + 10 * lv}%` },
+  { id: 'magnet', name: '磁铁项圈', py: 'cítiě xiàngquān', desc: '每关开始时戴上，从更远的地方吸来小鱼干。每关消耗 1 次。', pack: 3, cost: 40, max: 3, eff: lv => `吸取范围 ${60 + 55 * lv}` },
+  { id: 'shuriken', name: '旋转飞镖', py: 'xuánzhuǎn fēibiāo', desc: '每关开始时绕着猫窝高速旋转，切碎靠近的敌人。每关消耗 1 次。', pack: 2, cost: 110, max: 3, eff: lv => `${lv + 1} 枚飞镖` },
+  { id: 'lightning', name: '闪电云', py: 'shǎndiàn yún', desc: '每关开始时在猫窝上空聚起雷云，定时劈中附近的敌人。每关消耗 1 次。', pack: 2, cost: 130, max: 3, eff: lv => `每次劈 ${lv + 1} 个敌人` },
+  { id: 'helper', name: '小猫助手', py: 'xiǎomāo zhùshǒu', desc: '每关开始时请来小猫，跟着你一起开枪。每关消耗 1 次。', pack: 2, cost: 140, max: 2, eff: lv => `${lv} 只小猫` },
 ];
 
 const STATS = [

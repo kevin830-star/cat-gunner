@@ -76,6 +76,24 @@ const SFX = (() => {
     dash: [0, () => noise(0.35, { freq: 700, to: 3500, type: 'bandpass', vol: 0.3 })],
     bark: [0, () => { tone(420, 0.09, { to: 250, vol: 0.2 }); tone(440, 0.1, { to: 240, vol: 0.2, delay: 0.15 }); }],
     spit: [0, () => { tone(620, 0.09, { type: 'triangle', to: 950, vol: 0.13 }); noise(0.06, { freq: 3000, type: 'bandpass', vol: 0.1 }); }],
+    // 命中（按武器区分）
+    hit_pistol: [30, () => { tone(720, 0.05, { type: 'sine', to: 300, vol: 0.11 }); noise(0.04, { freq: 1800, vol: 0.09 }); }],
+    hit_shotgun: [40, () => { noise(0.09, { freq: 650, vol: 0.22 }); tone(170, 0.09, { type: 'sine', to: 80, vol: 0.16 }); }],
+    hit_smg: [30, () => tone(1900, 0.025, { type: 'triangle', vol: 0.07 })],
+    hit_laser: [30, () => { tone(1700, 0.12, { type: 'sawtooth', to: 420, vol: 0.1 }); noise(0.06, { freq: 5000, type: 'highpass', vol: 0.08 }); }],
+    hit_turret: [40, () => tone(320, 0.045, { type: 'triangle', to: 180, vol: 0.09 })],
+    // 合成与星级
+    merge: [0, () => { arp([523, 659, 784, 1047, 1319], 0.06, { type: 'triangle', vol: 0.14, dur: 0.16 }); noise(0.5, { freq: 4000, type: 'highpass', vol: 0.08, delay: 0.1 }); }],
+    mergeBig: [0, () => { arp([523, 659, 784, 1047, 1319, 1568, 2093], 0.07, { type: 'triangle', vol: 0.15, dur: 0.2 }); tone(100, 0.6, { type: 'sine', to: 38, vol: 0.4 }); noise(0.8, { freq: 500, to: 6000, type: 'bandpass', vol: 0.18 }); }],
+    star0: [0, () => { tone(784, 0.14, { type: 'triangle', vol: 0.16 }); tone(1047, 0.22, { type: 'triangle', vol: 0.14, delay: 0.07 }); }],
+    star1: [0, () => { tone(988, 0.14, { type: 'triangle', vol: 0.16 }); tone(1319, 0.22, { type: 'triangle', vol: 0.14, delay: 0.07 }); }],
+    star2: [0, () => { tone(1175, 0.14, { type: 'triangle', vol: 0.16 }); tone(1568, 0.3, { type: 'triangle', vol: 0.14, delay: 0.07 }); noise(0.4, { freq: 5000, type: 'highpass', vol: 0.07, delay: 0.1 }); }],
+    starMiss: [0, () => tone(300, 0.22, { type: 'triangle', to: 190, vol: 0.09 })],
+    // 巨龙
+    dragonRoar: [0, () => { tone(75, 1.1, { type: 'sawtooth', to: 130, vol: 0.38 }); tone(112, 1.1, { type: 'sawtooth', to: 70, vol: 0.2 }); noise(1.1, { freq: 700, to: 250, vol: 0.34 }); }],
+    fireBreath: [0, () => { noise(1.5, { freq: 1100, to: 350, vol: 0.5 }); tone(68, 1.5, { type: 'sawtooth', vol: 0.2 }); }],
+    meteorFall: [0, () => tone(1500, 0.9, { type: 'sine', to: 220, vol: 0.09 })],
+    meteorHit: [50, () => { noise(0.4, { freq: 900, to: 70, vol: 0.55 }); tone(90, 0.35, { type: 'sine', to: 32, vol: 0.5 }); }],
     // 界面
     buy: [0, () => { tone(1250, 0.07, { type: 'sine', vol: 0.13 }); tone(1680, 0.14, { type: 'sine', vol: 0.13, delay: 0.07 }); }],
     right: [0, () => arp([523, 659, 784, 1047], 0.09, { type: 'sine', vol: 0.15, dur: 0.18 })],
