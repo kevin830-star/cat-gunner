@@ -249,7 +249,8 @@ const freshRun = () => {
     level: 1, fish: 0, kills: 0,
     inv, eq: { id: 'pistol', tier: 0 },
     items: Object.fromEntries(ITEMS.map(it => [it.id, it.multi ? { uses: 0, lv: 1, units: [] } : { uses: 0, lv: 1 }])),
-    unlockedItems: 0, // 游戏开始时没有解锁任何道具，每击败一个头目解锁一个
+    unlockedItems: 1, // 开局只有猫薄荷，之后每击败一个头目按顺序解锁一个
+    itemOrder: 2,      // 道具解锁顺序的版本（2 = 猫薄荷、炮塔、冲击波……）
     pendingUnlock: null,
     stats: { catHp: 0, catSpd: 0, nestHp: 0 },
     nestHp: 300, miniPlayed: false, lastBonus: 0, seen: {}, stars: {}, lastStars: 0, lastStarBonus: 0, lastCatLoss: 0, lastNestLoss: 0,
@@ -267,8 +268,9 @@ function loadRun() {
     const run = freshRun();
     for (const k of ['level', 'fish', 'kills', 'nestHp', 'lastBonus', 'lastStars', 'lastStarBonus', 'lastCatLoss', 'lastNestLoss']) if (Number.isFinite(d[k])) run[k] = d[k];
     run.miniPlayed = !!d.miniPlayed;
-    if (Number.isFinite(d.unlockedItems)) run.unlockedItems = clamp(Math.floor(d.unlockedItems), 0, ITEMS.length);
-    else run.unlockedItems = clamp(Math.floor(run.level / BOSS_EVERY), 0, ITEMS.length);
+    // 旧版的解锁数量不包含开局就有的猫薄荷，所以要多算 1 个
+    if (Number.isFinite(d.unlockedItems)) run.unlockedItems = clamp(Math.floor(d.unlockedItems) + (d.itemOrder === 2 ? 0 : 1), 1, ITEMS.length);
+    else run.unlockedItems = clamp(1 + Math.floor(run.level / BOSS_EVERY), 1, ITEMS.length);
     run.pendingUnlock = typeof d.pendingUnlock === 'string' ? d.pendingUnlock : null;
     run.inv = freshInv();
     if (d.inv) {
@@ -1756,7 +1758,7 @@ function renderShop() {
       btns: btn('buyW', w.id, `购买 ${w.cost} 🐟`, fish >= w.cost) });
   }
 
-  // 道具区：游戏开始时没有道具可购买；每打败一个 Boss 解锁一个道具
+  // 道具区：开局只有猫薄荷；每打败一个头目按顺序解锁下一个道具
   h += `</div><h3>道具（已解锁 ${G.unlockedItems}/${ITEMS.length} · 每击败 1 个头目解锁 1 个）</h3><div class="cards">`;
   const unlockedList = ITEMS.slice(0, G.unlockedItems);
   for (const it of unlockedList) {
@@ -1779,7 +1781,7 @@ function renderShop() {
       icon: nxt.id,
       name: `🔒 待解锁：${nxt.name}`,
       py: nxt.py,
-      desc: G.unlockedItems === 0 ? '游戏初始无道具可买。击败第 3 关头目即可解锁首件道具！' : '击败下一个头目即可解锁此道具！',
+      desc: G.unlockedItems === 1 ? '击败第 3 关的头目即可解锁！' : '击败下一个头目即可解锁此道具！',
       lv: `预告：${nxt.desc}`,
       btns: btn('', '', '击败头目解锁', false),
       locked: true,

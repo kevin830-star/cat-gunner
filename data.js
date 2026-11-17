@@ -37,16 +37,16 @@ const TIERS = [
 const MERGE_NEED = [2, 2, 2, 3, 3];
 
 // ---------- 道具 ----------
-// 游戏开始时商店里没有道具可买；每打败一个 Boss 按顺序解锁一个道具
+// 解锁顺序就是下面的排列顺序：猫薄荷开局就有，之后每打败一个头目按顺序解锁下一个（炮塔、冲击波……）
 // pack：一次购买得到的使用次数；manual 为手动使用道具，其余每关开始时自动消耗 1 次
 const ITEM_CAP = 9;
 const ITEMS = [
-  { id: 'shockwave', name: '冲击波', py: 'chōngjībō', desc: '手动使用（F 键或按钮）：释放强力电磁气浪，全屏敌人被震晕并向后震退五格（500 距离），同时震碎敌方弹幕。', manual: true, key: 'F', pack: 1, cost: 300, max: 3,
-    eff: lv => `全屏震退 5 格 · 眩晕 ${(1.2 + 0.4 * (lv - 1)).toFixed(1)} 秒${lv > 1 ? ` · 伤害 +${35 * (lv - 1)}%` : ''}` },
   { id: 'catnip', name: '猫薄荷', py: 'māo bòhe', desc: '手动使用（空格键或按钮）：一段时间内移动和射击都变快。每用一次消耗 1 次。', manual: true, key: '空格', pack: 3, cost: 45, max: 3,
     eff: lv => `持续 ${5 + 2 * lv} 秒` },
   { id: 'turret', name: '自动炮塔', py: 'zìdòng pàotǎ', desc: '在猫窝旁自动射击。每买一次多一座（最多同时 4 座），每座能用 3 关。升级会让所有炮塔更强。', multi: 4, unit: '座',
     pack: 3, cost: 70, max: 3, eff: lv => lv === 1 ? '基础强度' : `伤害 +${35 * (lv - 1)}%，射速 +${Math.round(100 / (1 - 0.1 * (lv - 1)) - 100)}%` },
+  { id: 'shockwave', name: '冲击波', py: 'chōngjībō', desc: '手动使用（F 键或按钮）：释放强力电磁气浪，全屏敌人被震晕并向后震退五格（500 距离），同时震碎敌方弹幕。', manual: true, key: 'F', pack: 1, cost: 300, max: 3,
+    eff: lv => `全屏震退 5 格 · 眩晕 ${(1.2 + 0.4 * (lv - 1)).toFixed(1)} 秒${lv > 1 ? ` · 伤害 +${35 * (lv - 1)}%` : ''}` },
   { id: 'fence', name: '铁丝围栏', py: 'tiěsī wéilán', desc: '每关开始时围住猫窝，靠近的敌人会变慢。每关消耗 1 次。', pack: 3, cost: 60, max: 3, eff: lv => `减速 ${20 + 10 * lv}%` },
   { id: 'magnet', name: '磁铁项圈', py: 'cítiě xiàngquān', desc: '每关开始时戴上，从更远的地方吸来小鱼干。每关消耗 1 次。', pack: 3, cost: 40, max: 3, eff: lv => `吸取范围 ${60 + 55 * lv}` },
   { id: 'shuriken', name: '旋转飞镖', py: 'xuánzhuǎn fēibiāo', desc: '绕着猫窝高速旋转，切碎靠近的敌人。每买一次多一枚（最多同时 4 枚），每枚能用 2 关。升级会让所有飞镖更强。', multi: 4, unit: '枚',
