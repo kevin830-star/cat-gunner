@@ -510,7 +510,8 @@ function burst(x, y, color, n = 6, speed = 120) {
 }
 
 // ---------- 敌人 ----------
-const hpScale = lv => (1 + 0.12 * (lv - 1)) * (1 + 0.04 * Math.max(0, lv - 8));
+// 敌人血量随关卡增长得比较慢：武器品级倍率已经调低（S 级 ×11），血量也同比例缩小，难度和以前差不多，但数字不再夸张
+const hpScale = lv => Math.min(1 + 0.055 * (lv - 1), 1.6 + 0.015 * Math.max(0, lv - 12));
 const dmgScale = lv => (1 + 0.08 * (lv - 1)) * (1 + 0.025 * Math.max(0, lv - 8));
 const speedScale = lv => Math.min(1.7, 1 + 0.03 * (lv - 1));
 const ENEMY_CAP = 110;
@@ -536,7 +537,7 @@ function spawnEnemy(type, pos, tierArg) {
   let hp = d.hp * hpScale(lv) * T.hp;
   const kind = type === 'boss' ? bossFor(lv) : null;
   // 头目血量翻倍（BOSS_HP_MULT = 3.0，为原版 1.5 的两倍）
-  if (kind) hp = d.hp * kind.hp * (1 + 0.7 * (lv / BOSS_EVERY - 1)) * BOSS_HP_MULT;
+  if (kind) hp = d.hp * kind.hp * (1 + 0.22 * (lv / BOSS_EVERY - 1)) * BOSS_HP_MULT;
   const e = {
     type, tier, x, y, r: d.r * T.size, hp, maxHp: hp, spd: d.spd * speedScale(lv) * T.spd * rand(0.92, 1.08),
     dmg: d.dmg * (special ? 1 + 0.08 * (lv - 1) : dmgScale(lv)) * T.dmg, cd: rand(0.3, 1), cd2: 0, flash: 0, face: 1, t: rand(0, 10), seed: rand(0, 6.28), summon: 4, dead: false,

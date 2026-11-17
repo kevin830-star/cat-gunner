@@ -30,11 +30,11 @@ const WEAPONS = [
 // dmg / spd：伤害和射击间隔的倍数；need：合成成下一阶需要几把相同的武器（第 i 项 = 把 i 阶合成 i+1 阶）
 const TIERS = [
   { id: 'D', name: '普通', color: '#a8794a', dmg: 1, spd: 1 },
-  { id: 'C', name: '优秀', color: '#4fb83c', dmg: 2.2, spd: 0.94 },
-  { id: 'B', name: '精良', color: '#3d8bff', dmg: 4.8, spd: 0.88 },
-  { id: 'A', name: '史诗', color: '#a45cf0', dmg: 10.5, spd: 0.82 },
-  { id: 'S', name: '传说', color: '#ffb300', dmg: 25, spd: 0.76 },
-  { id: 'SSS', name: '神话', color: '#ff5e9a', dmg: 62, spd: 0.68 },
+  { id: 'C', name: '优秀', color: '#4fb83c', dmg: 1.9, spd: 0.94 },
+  { id: 'B', name: '精良', color: '#3d8bff', dmg: 3.5, spd: 0.88 },
+  { id: 'A', name: '史诗', color: '#a45cf0', dmg: 6.5, spd: 0.82 },
+  { id: 'S', name: '传说', color: '#ffb300', dmg: 11, spd: 0.76 },
+  { id: 'SSS', name: '神话', color: '#ff5e9a', dmg: 18, spd: 0.68 },
 ];
 const MERGE_NEED = [2, 2, 2, 3, 3];
 
