@@ -817,8 +817,10 @@ function spawnWave() {
   const first = spawnEnemy(type, undefined, tier);
   for (let i = 1; i < n; i++) spawnEnemy(type, { x: first.x + rand(-30, 30), y: first.y + rand(-30, 30) }, tier);
 }
+// 每关怪物数量系数（整体减少 30%）
+const ENEMY_COUNT_MUL = 0.7;
 function hordeBurst() {
-  const lv = G.level, side = randInt(0, 3), n = Math.min(Math.floor((6 + lv * 0.7) * (L.boss ? 0.6 : 1)), Math.max(0, ENEMY_CAP - L.enemies.length));
+  const lv = G.level, side = randInt(0, 3), n = Math.min(Math.floor((6 + lv * 0.7) * (L.boss ? 0.6 : 1) * ENEMY_COUNT_MUL), Math.max(0, ENEMY_CAP - L.enemies.length));
   const mid = side < 2 ? rand(300, WORLD.w - 300) : rand(250, WORLD.h - 250);
   for (let i = 0; i < n; i++) {
     const p = edgePos(side, mid + rand(-170, 170)), out = rand(0, 90);
@@ -1149,7 +1151,7 @@ function update(rawDt) {
       const per = 1 + Math.floor(Math.max(0, G.level - 19) / 8);
       for (let i = 0; i < per; i++) spawnWave();
       const base = Math.max(0.45, 1.7 * Math.pow(0.92, G.level - 1));
-      L.spawnT = base * (1 - 0.3 * L.elapsed / LEVEL_TIME) * rand(0.8, 1.2) * (L.boss ? 1.8 : 1);
+      L.spawnT = base * (1 - 0.3 * L.elapsed / LEVEL_TIME) * rand(0.8, 1.2) * (L.boss ? 1.8 : 1) / ENEMY_COUNT_MUL;
     }
   }
   // 头目在关卡的最后出现（倒计时剩余 3 秒内登场，且血量翻倍）
@@ -1968,7 +1970,7 @@ function shopAction(action, id) {
   }
   else if (action === 'stat') {
     const s = STATS.find(x => x.id === id), lv = G.stats[id];
-    if (lv < s.max && pay(statCost(lv))) { G.stats[id]++; if (id === 'nestHp') G.nestHp += 100; }
+    if (lv < s.max && pay(statCost(lv))) { G.stats[id]++; if (id === 'nestHp') { G.nestHp = nestMaxHp(); } }
   }
   else if (action === 'repair') { if (G.nestHp < nestMaxHp() && pay(REPAIR_COST)) G.nestHp = Math.min(nestMaxHp(), G.nestHp + REPAIR_HP); }
   saveRun();
@@ -2927,5 +2929,5 @@ setState('menu');
 requestAnimationFrame(frame);
 
 // 调试接口
-window.__cat = { get G() { return G; }, get L() { return L; }, get state() { return state; }, get exam() { return exam; }, set auto(v) { touchMode = v; }, update, startLevel, applyBuff, levelClear, rateLevel, weaponStats, mergeAll, ilv, spawnEnemy, useShockwave, triggerRedRage, openReviveExam, showUnlock, makeMiniQuestion, makeExamQuestion, openQuiz, openMini, get mini() { return mini; }, get quiz() { return quiz; } };
+window.__cat = { get G() { return G; }, get L() { return L; }, get state() { return state; }, get exam() { return exam; }, set auto(v) { touchMode = v; }, update, startLevel, applyBuff, levelClear, rateLevel, weaponStats, mergeAll, ilv, spawnEnemy, useShockwave, triggerRedRage, openReviveExam, showUnlock, makeMiniQuestion, shopAction, makeExamQuestion, openQuiz, openMini, get mini() { return mini; }, get quiz() { return quiz; } };
 })();
