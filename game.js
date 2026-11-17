@@ -109,6 +109,7 @@ window.addEventListener('keydown', e => {
     if (k === 'e') cycleWeapon(-1);
     if (k === ' ') { useCatnip(); e.preventDefault(); }
     if (k === 'f') { useShockwave(); e.preventDefault(); }
+    if (k === 'r') fireMissiles();
     if (k >= '1' && k <= '5') { const w = WEAPONS[+k - 1], t = bestTier(w.id); if (t >= 0) { G.eq = { id: w.id, tier: t }; sfx.switch(); } }
     if (k === 'p' || k === 'escape') pauseGame();
   } else if (state === 'paused' && (k === 'p' || k === 'escape')) {
@@ -119,6 +120,8 @@ window.addEventListener('keydown', e => {
   } else if (state === 'mini' && mini) {
     if (mini.chosen < 0 && k >= '1' && k <= '4') answerMini(+k - 1);
     else if (mini.chosen >= 0 && (k === ' ' || k === 'enter')) { e.preventDefault(); nextMini(); }
+  } else if (state === 'exam' && exam && !exam.started && (k === ' ' || k === 'enter')) {
+    e.preventDefault(); exam.started = true; renderExam();
   } else if (state === 'exam' && exam && !exam.finished) {
     if (exam.chosen < 0 && k >= '1' && k <= '4') answerExam(+k - 1);
     else if (exam.chosen >= 0 && (k === ' ' || k === 'enter')) { e.preventDefault(); nextExam(); }
@@ -160,6 +163,7 @@ const ibEls = {};
   const bar = $('itemBar');
   const mk = (id, html, cls = '') => { const b = document.createElement('button'); b.className = 'ib ' + cls; b.dataset.ib = id; b.innerHTML = html; bar.appendChild(b); ibEls[id] = { el: b, sig: null }; };
   mk('weapon', '<img alt=""><span class="tierb"></span><span class="key">Q</span>', 'wb');
+  mk('missile', `<img src="${ICONS.url.missile}" alt=""><span class="ct"></span><span class="key">R</span>`);
   for (const it of ITEMS) mk(it.id, `<img src="${ICONS.url[it.id]}" alt=""><span class="cd"></span><span class="ct"></span>${it.manual ? `<span class="key">${it.key || '空格'}</span>` : ''}${it.multi ? '<span class="num"></span>' : ''}`);
   bar.addEventListener('pointerdown', e => {
     const b = e.target.closest('.ib');
@@ -187,10 +191,10 @@ const isItemUnlocked = (id, r = G) => {
 };
 const tierColor = t => t >= 5 ? `hsl(${Math.floor(performance.now() / 6) % 360} 90% 58%)` : TIERS[t].color;
 const ilv = id => (L && L.on && L.on[id]) || 0;  // 本关生效中的道具强度（0 = 没有生效）
-const fenceSlow = () => 0.2 + 0.1 * ilv('fence');
-const itemUpCost = (it, lv) => Math.round(it.cost * 1.5 * lv);
-// 可以同时拥有多个的道具（炮塔、飞镖）：units 里每一项是一座/一枚还能用几关
-const itemLeft = id => itemDef(id).multi ? Math.max(0, ...G.items[id].units) : G.items[id].uses;
+const fenceSlow = () => 0.12 + 0.08 * ilv('fence');
+const itemUpCost = (it, lv) => Math.round(it.cost * 1.2 * lv);   // 合成升级 = 再买一份合进去，等级越高越贵
+// 道具状态：n = 拥有几个（炮塔/飞镖最多 4 个，其他最多 1 个），lv = 合成等级
+const owned = id => G.items[id].n > 0;
 const itemPow = id => 1 + 0.35 * (G.items[id].lv - 1);  // 升级带来的伤害倍数
 const tierBadge = (t, cls = '') => `<span class="tier t${t} ${cls}" style="--tc:${TIERS[t].color}">${TIERS[t].id}</span>`;
 
@@ -258,7 +262,7 @@ const freshRun = () => {
   return {
     level: 1, fish: 0, kills: 0,
     inv, eq: { id: 'pistol', tier: 0 },
-    items: Object.fromEntries(ITEMS.map(it => [it.id, it.multi ? { uses: 0, lv: 1, units: [] } : { uses: 0, lv: 1 }])),
+    items: Object.fromEntries(ITEMS.map(it => [it.id, { n: 0, lv: 1 }])),
     unlockedItems: 1, // 开局只有猫薄荷，之后每击败一个头目按顺序解锁一个
     itemOrder: 2,      // 道具解锁顺序的版本（2 = 猫薄荷、炮塔、冲击波……）
     pendingUnlock: null,
@@ -292,20 +296,18 @@ function loadRun() {
       : typeof d.cur === 'string' && run.inv[d.cur] ? { id: d.cur, tier: Math.max(bestTier(d.cur, run), 0) } : null;
     run.eq = eq || { id: 'pistol', tier: 0 };
     fixEquip(run);
+    // 道具：新格式 {n, lv}；旧格式里有次数的道具（uses / units）转成永久拥有
     for (const it of ITEMS) {
-      const v = d.items && d.items[it.id];
-      if (it.multi) {
-        let units = [], lv = 1;
-        if (v && Array.isArray(v.units)) { units = v.units.map(u => clamp(Math.floor(u) || 0, 0, ITEM_CAP)).filter(u => u > 0).slice(0, it.multi); lv = clamp(Math.floor(v.lv) || 1, 1, it.max); }
-        else if (typeof v === 'number') { if (v > 0) units = Array(Math.min(it.multi, v + 1)).fill(3); }
-        else if (v && typeof v === 'object' && v.uses > 0) units = Array(Math.min(it.multi, (Math.floor(v.lv) || 1) + 1)).fill(clamp(Math.floor(v.uses), 1, ITEM_CAP));
-        run.items[it.id] = { uses: 0, lv, units };
-        continue;
+      const v = d.items && d.items[it.id], cap = it.multi || 1;
+      let n = 0, lv = 1;
+      if (typeof v === 'number') { n = v > 0 ? Math.min(cap, it.multi ? v + 1 : 1) : 0; lv = clamp(Math.floor(v) || 1, 1, it.max); }
+      else if (v && typeof v === 'object') {
+        n = Number.isFinite(v.n) ? v.n : Array.isArray(v.units) ? v.units.length : v.uses > 0 ? 1 : 0;
+        lv = Math.floor(v.lv) || 1;
       }
-      if (typeof v === 'number') { if (v > 0) run.items[it.id] = { uses: 3, lv: clamp(Math.floor(v), 1, it.max) }; }
-      else if (v && typeof v === 'object') run.items[it.id] = { uses: clamp(Math.floor(v.uses) || 0, 0, ITEM_CAP), lv: clamp(Math.floor(v.lv) || 1, 1, it.max) };
+      run.items[it.id] = { n: clamp(Math.floor(n) || 0, 0, cap), lv: clamp(lv, 1, it.max) };
     }
-    for (const st of STATS) if (d.stats && d.stats[st.id] >= 0) run.stats[st.id] = clamp(Math.floor(d.stats[st.id]), 0, st.max);
+    for (const st of STATS) if (d.stats && d.stats[st.id] >= 0) run.stats[st.id] = clamp(Math.floor(d.stats[st.id]), 0, Number.isFinite(st.max) ? st.max : 999);
     if (d.seen && typeof d.seen === 'object') for (const k in d.seen) if (d.seen[k]) run.seen[k] = 1;
     if (d.stars && typeof d.stars === 'object') for (const k in d.stars) if (d.stars[k] >= 1 && d.stars[k] <= 3) run.stars[k] = d.stars[k] | 0;
     return run;
@@ -347,7 +349,7 @@ function startLevel() {
     // 每个关卡开始，猫的生命值回满
     cat: { x: NEST.x, y: NEST.y + 95, r: 17, hp: fullCatHp, cd: 0, inv: 0, aim: 0, walk: 0, moving: false, kx: 0, ky: 0, s: 1 },
     enemies: [], bullets: [], ebullets: [], fish: [], parts: [], texts: [], turrets: [],
-    atkBuff: 0, catnipT: 0, shockwaveCd: 0, redRageT: 0, reviveUsed: false,
+    atkBuff: 0, catnipT: 0, catnipCd: 0, shockwaveCd: 0, missileUsed: false, redRageT: 0, reviveUsed: false,
     catLost: 0, nestLost: 0, catMax: fullCatHp, nestMax: nestMaxHp(), on: {}, starsSnd: 3,
     boss: null, bossSpawned: false, bossHalfAsked: false, isBoss: isBossLevel(G.level),
     shake: 0, banner: 2.2, nestFlash: 0,
@@ -361,20 +363,17 @@ function startLevel() {
   ring(L.cat.x, L.cat.y, 65, '#7ed957', 0.55);
   addText(L.cat.x, L.cat.y - 34, `猫咪生命已回满 (${fullCatHp})`, '#9cff6b', 15, 1.4);
 
-  // 道具：每关开始时消耗 1 次使用次数（仅限已解锁道具）
+  // 道具：已拥有的被动道具每关自动生效（永久拥有，不限次数）
   for (let idx = 0; idx < G.unlockedItems; idx++) {
-    const it = ITEMS[idx];
-    const st = G.items[it.id];
-    if (it.multi) {
-      if (!Array.isArray(st.units)) { st.units = st.uses > 0 ? Array(Math.min(it.multi, (st.lv || 1) + 1)).fill(st.uses) : []; st.uses = 0; st.lv = 1; }
-      if (st.units.length) { L.on[it.id] = st.units.length; st.units = st.units.map(u => u - 1).filter(u => u > 0); }
-    } else if (!it.manual && st.uses > 0) { st.uses--; L.on[it.id] = st.lv; }
+    const it = ITEMS[idx], st = G.items[it.id];
+    if (st.n === undefined) st.n = Array.isArray(st.units) ? st.units.length : st.uses > 0 ? 1 : 0;
+    if (!it.manual && st.n > 0) L.on[it.id] = it.multi ? st.n : st.lv;   // 炮塔/飞镖记数量，其他记等级
   }
   for (let i = 0; i < ilv('turret'); i++) {
     const a = Math.PI / 4 + i * Math.PI / 2;
     L.turrets.push({ x: NEST.x + Math.cos(a) * 82, y: NEST.y + Math.sin(a) * 82, cd: rand(0, 0.5), aim: a });
   }
-  for (let i = 0; i < ilv('helper'); i++) L.helpers.push({ x: NEST.x - 30 + i * 60, y: NEST.y + 120, cd: rand(0, 0.5), aim: 0, side: i ? 1 : -1 });
+  for (let i = 0; i < (ilv('helper') >= 3 ? 2 : ilv('helper') ? 1 : 0); i++) L.helpers.push({ x: NEST.x - 30 + i * 60, y: NEST.y + 120, cd: rand(0, 0.5), aim: 0, side: i ? 1 : -1 });
   show(null);
   setState('playing');
 }
@@ -399,27 +398,27 @@ function pressItem(id) {
     if (ownedList().length < 2) return toast('只有一把武器，去商店买新的或合成');
     return cycleWeapon(1);
   }
+  if (id === 'missile') return fireMissiles();
   if (!isItemUnlocked(id)) return toast('击败头目后解锁该道具');
   const it = itemDef(id), st = G.items[id];
+  if (!owned(id)) return toast(`还没有${it.name}，去商店购买（${it.cost} 🐟）`);
   if (id === 'shockwave') {
-    if (L.shockwaveCd > 0) return;
-    if (st.uses <= 0) return toast(`${it.name}用完了，去商店购买（300 🐟/个）`);
+    if (L.shockwaveCd > 0) return toast(`${it.name}冷却中，还要 ${Math.ceil(L.shockwaveCd)} 秒`);
     return useShockwave();
   }
   if (id === 'catnip') {
     if (L.catnipT > 0) return;
-    if (st.uses <= 0) return toast(`${it.name}用完了，去商店补充`);
+    if (L.catnipCd > 0) return toast(`${it.name}冷却中，还要 ${Math.ceil(L.catnipCd)} 秒`);
     return useCatnip();
   }
-  if (it.multi) return toast(st.units.length ? `${it.name} ${ilv(id)} ${it.unit}生效中，下一关还剩 ${st.units.length} ${it.unit}` : `${it.name}本关是最后一次，去商店补充`);
-  toast(st.uses > 0 ? `${it.name}已自动生效，还剩 ${st.uses} 次（每关用 1 次）` : `${it.name}本关生效，已是最后一次，去商店补充`);
+  toast(`${it.name} ${st.lv} 级${it.multi ? ` · ${st.n} ${it.unit}` : ''}，每关自动生效`);
 }
 
 function useCatnip() {
   if (!isItemUnlocked('catnip')) return;
   const st = G.items.catnip;
-  if (st.uses <= 0 || L.catnipT > 0) return;
-  st.uses--; L.catnipT = 5 + 2 * st.lv;
+  if (!owned('catnip') || L.catnipT > 0 || L.catnipCd > 0) return;
+  L.catnipT = 5 + 2 * st.lv; L.catnipCd = itemDef('catnip').cool(st.lv);   // 冷却在效果结束后才开始倒数
   addText(L.cat.x, L.cat.y - 34, '猫薄荷！', '#9cff6b', 18);
   announce('猫薄荷');
   sfx.catnip();
@@ -429,9 +428,8 @@ function useCatnip() {
 function useShockwave() {
   if (!isItemUnlocked('shockwave')) return;
   const st = G.items.shockwave;
-  if (st.uses <= 0 || L.shockwaveCd > 0) return;
-  st.uses--;
-  L.shockwaveCd = 0.9;
+  if (!owned('shockwave') || L.shockwaveCd > 0) return;
+  L.shockwaveCd = itemDef('shockwave').cool(st.lv);
   const c = L.cat;
   L.shake = 0.65;
   sfx.shockwave();
@@ -464,6 +462,23 @@ function useShockwave() {
     addText(e.x, e.y - e.r - 16, '震退!', '#8fd0ff', 14, 0.9);
     damageEnemy(e, shockDmg);
   }
+}
+
+// 导弹防御：猫窝 3 级起每关一次，从猫窝向四面八方发射导弹，碰到第一个敌人就爆炸（范围伤害）
+function fireMissiles() {
+  if (!G || G.stats.nestHp < 3) return toast('猫窝升到 3 级后解锁导弹防御');
+  if (L.missileUsed) return toast('导弹防御每关只能用一次');
+  L.missileUsed = true;
+  const lv = G.stats.nestHp, n = Math.min(36, 16 + 2 * (lv - 3)), dmg = (60 + 12 * G.level) * (1 + 0.15 * (lv - 3));
+  for (let i = 0; i < n; i++) {
+    const a = i * TAU / n + rand(-0.04, 0.04), sp = rand(360, 420);
+    L.bullets.push({ x: NEST.x + Math.cos(a) * 46, y: NEST.y - 20 + Math.sin(a) * 36, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp,
+      dmg, life: 3, r: 7, pierce: 0, explode: 90, splash: 0, tier: 0, color: '#ff6b3c', kind: 'missile', hit: new Set(), noEndBoom: true });
+  }
+  ring(NEST.x, NEST.y, 140, '#ff9a3c', 0.5, true); burst(NEST.x, NEST.y - 20, '#ffd84a', 20, 220);
+  L.shake = Math.max(L.shake, 0.3); sfx.missile();
+  addText(NEST.x, NEST.y - 80, '🚀 导弹防御！', '#ffb347', 20, 1.5);
+  announce('导弹防御');
 }
 
 // 答对头目中文题后触发：慢镜头特写，全身变大变红，周身金光上升，维持 5 秒钟
@@ -868,8 +883,8 @@ function applyBuff(b) {
   const c = L.cat;
   if (b.dur) {
     L.buffT[b.id] = b.dur;
-    L.morphT = 0.4; L.shake = Math.max(L.shake, 0.25);
-    ring(c.x, c.y, 120, b.color, 0.45); ring(c.x, c.y, 70, '#fff', 0.3);
+    if (b.id === 'nestShield') { ring(NEST.x, NEST.y, 150, b.color, 0.6, true); ring(NEST.x, NEST.y, 100, '#fff', 0.4); }
+    else { L.morphT = 0.4; L.shake = Math.max(L.shake, 0.25); ring(c.x, c.y, 120, b.color, 0.45); ring(c.x, c.y, 70, '#fff', 0.3); }
   }
   if (b.id === 'heal') c.hp = Math.min(catMaxHp(), c.hp + 35);
   if (b.id === 'magnet') for (const f of L.fish) f.fly = true;
@@ -890,6 +905,10 @@ function hurtCat(dmg) {
   sfx.hurt();
 }
 function hurtNest(dmg) {
+  if (L.buffT.nestShield > 0) {   // 猫窝护盾挡住伤害
+    if (Math.random() < 0.25) addText(NEST.x + rand(-30, 30), NEST.y - 60, '挡住了', '#8fd0ff', 13, 0.7);
+    return;
+  }
   sfx.nestHit();
   G.nestHp -= dmg; L.nestLost += dmg; L.nestFlash = 0.15;
   addText(NEST.x + rand(-20, 20), NEST.y - 50, '-' + Math.round(dmg), '#ff6b5e', 15);
@@ -1028,7 +1047,7 @@ function updateGadgets(dt) {
     if (L.stormCd <= 0) {
       const near = L.enemies.filter(e => !e.dead && dist(e, NEST) < 440).sort((a, b) => dist(a, NEST) - dist(b, NEST)).slice(0, ilv('lightning') + 1);
       if (near.length) {
-        L.stormCd = 3.4 - 0.5 * ilv('lightning');
+        L.stormCd = Math.max(1.2, 3.4 - 0.4 * ilv('lightning'));
         for (const e of near) {
           const pts = [[NEST.x, NEST.y - 95]];
           for (let k = 1; k < 6; k++) pts.push([NEST.x + (e.x - NEST.x) * k / 6 + rand(-16, 16), NEST.y - 95 + (e.y - NEST.y + 95) * k / 6 + rand(-16, 16)]);
@@ -1049,7 +1068,7 @@ function updateGadgets(dt) {
       h.aim = Math.atan2(e.y - h.y, e.x - h.x);
       if (h.cd <= 0) {
         h.cd = 0.55; sfx.helper();
-        L.bullets.push({ x: h.x, y: h.y, vx: Math.cos(h.aim) * 540, vy: Math.sin(h.aim) * 540, dmg: 8 + 1.5 * lv, life: 0.7, r: 4, pierce: 0, explode: 0, color: '#ffb347', kind: 'turret', hit: new Set() });
+        L.bullets.push({ x: h.x, y: h.y, vx: Math.cos(h.aim) * 540, vy: Math.sin(h.aim) * 540, dmg: (8 + 1.5 * lv) * itemPow('helper'), life: 0.7, r: 4, pierce: 0, explode: 0, color: '#ffb347', kind: 'turret', hit: new Set() });
       }
     }
   }
@@ -1078,6 +1097,7 @@ function update(rawDt) {
   L.time = Math.max(0, L.time - dt);
   L.banner -= rawDt; L.shake = Math.max(0, L.shake - rawDt); L.nestFlash = Math.max(0, L.nestFlash - rawDt);
   if (L.catnipT > 0) L.catnipT -= rawDt;
+  else if (L.catnipCd > 0) L.catnipCd = Math.max(0, L.catnipCd - rawDt);
   if (L.shockwaveCd > 0) L.shockwaveCd = Math.max(0, L.shockwaveCd - rawDt);
   for (const k in L.buffT) if (L.buffT[k] > 0) L.buffT[k] -= rawDt;
   if (L.notice && L.notice !== L.saidNotice) { L.saidNotice = L.notice; announce(L.notice.text); }
@@ -1217,6 +1237,7 @@ function update(rawDt) {
   // 子弹（玩家子弹在慢镜头下保持正常高速）
   for (const b of L.bullets) {
     b.x += b.vx * catDt; b.y += b.vy * catDt; b.life -= catDt;
+    if (b.kind === 'missile' && Math.random() < 0.6) L.parts.push({ x: b.x - b.vx * 0.03, y: b.y - b.vy * 0.03, vx: rand(-20, 20), vy: rand(-20, 20), life: 0.45, color: 'rgba(210,210,210,.75)', r: rand(3, 5) });
     for (const e of L.enemies) {
       if (e.dead || b.hit.has(e) || dist(e, b) > e.r + b.r) continue;
       if (b.explode) { explode(b); b.dead = true; break; }
@@ -1226,7 +1247,7 @@ function update(rawDt) {
       if (b.splash) splashHit(b, e);
       if (b.pierce-- <= 0) { b.dead = true; break; }
     }
-    if (!b.dead && b.life <= 0) { if (b.explode) explode(b); b.dead = true; }
+    if (!b.dead && b.life <= 0) { if (b.explode && !b.noEndBoom) explode(b); b.dead = true; }
   }
   for (const b of L.ebullets) {
     b.x += b.vx * dt; b.y += b.vy * dt; b.life -= dt;
@@ -1240,7 +1261,7 @@ function update(rawDt) {
     if (e) {
       t.aim = Math.atan2(e.y - t.y, e.x - t.x);
       if (t.cd <= 0) {
-        t.cd = 0.7 * (1 - 0.1 * (G.items.turret.lv - 1)); sfx.turret();
+        t.cd = 0.7 * (1 - 0.08 * (G.items.turret.lv - 1)); sfx.turret();
         L.bullets.push({ x: t.x, y: t.y, vx: Math.cos(t.aim) * 520, vy: Math.sin(t.aim) * 520, dmg: (9 + G.level) * itemPow('turret'), life: 0.7, r: 4, pierce: 0, explode: 0, color: '#ffd84a', kind: 'turret', hit: new Set() });
       }
     }
@@ -1273,8 +1294,7 @@ function update(rawDt) {
   // 胜负判定：中途被打败时，若本关尚未使用复活考试，则触发 10 题中文复活考试
   if (G.nestHp <= 0 || c.hp <= 0) {
     const reason = G.nestHp <= 0 ? '猫窝被攻破了……' : '猫咪倒下了……';
-    if (!L.reviveUsed) return openReviveExam(reason);
-    return gameOver(reason);
+    return openReviveExam(reason);   // 每次倒下都可以参加中文测验复活，不限次数
   }
   if (L.time <= 0 && (!L.isBoss || L.bossSpawned) && !L.boss) levelClear();
 }
@@ -1537,8 +1557,10 @@ function openReviveExam(reason) {
     passNeed: 8,
     chosen: -1,
     finished: false,
+    started: false,   // 先显示提示，玩家点「开始」后才开始答题
   };
   sfx.boss();
+  announce(`${reason.replace(/……/g, '')}，进行中文测验，答对八题即可复活`);
   setState('exam');
   renderExam();
   show('exam');
@@ -1546,6 +1568,15 @@ function openReviveExam(reason) {
 
 function renderExam() {
   const ex = exam;
+  if (!ex.started) {
+    $('examBody').innerHTML = `
+      <h2>${ex.reason}</h2>
+      <div class="stat">进行中文测验，答对 <b>${ex.passNeed}</b> 题即可复活！<br>
+        共 ${ex.total} 题：偏旁填空、词语填空、成语填空、读音选择</div>
+      <button class="big" data-action="examStart">开始</button><br>
+      <button class="plain" data-action="examGiveUp">放弃，直接结算</button>`;
+    return;
+  }
   if (ex.finished) {
     const passed = ex.right >= ex.passNeed;
     $('examBody').innerHTML = `
@@ -1595,7 +1626,7 @@ function renderExam() {
 
 function answerExam(i) {
   const ex = exam;
-  if (!ex || ex.finished || ex.chosen >= 0) return;
+  if (!ex || !ex.started || ex.finished || ex.chosen >= 0) return;
   const q = ex.questions[ex.i];
   if (i < 0 || i >= q.opts.length) return;
   ex.chosen = i;
@@ -1799,17 +1830,17 @@ function renderShop() {
   const unlockedList = ITEMS.slice(0, G.unlockedItems);
   for (const it of unlockedList) {
     const st = G.items[it.id], upC = itemUpCost(it, st.lv);
-    const up = st.lv < it.max ? btn('upI', it.id, `升级 ${upC} 🐟`, fish >= upC) : btn('', '', '强度已满', false);
+    // 合成升级：再买一份合进去，等级 +1，威力增强
+    const up = !st.n ? '' : st.lv < it.max ? btn('upI', it.id, `合成升级 ${upC} 🐟`, fish >= upC) : btn('', '', '已满级', false);
+    let buy, have;
     if (it.multi) {
-      const full = st.units.length >= it.multi, canTop = st.units.some(u => u < ITEM_CAP);
-      const buy = btn('buyI', it.id, full ? `补充 +${it.pack} 关 ${it.cost} 🐟` : `+1 ${it.unit} ${it.cost} 🐟`, fish >= it.cost && (!full || canTop));
-      const have = st.units.length ? `已有 <b>${st.units.length}/${it.multi}</b> ${it.unit}，各剩 ${st.units.join('/')} 关` : `还没有（最多 ${it.multi} ${it.unit}）`;
-      h += card({ icon: it.id, name: it.name, py: it.py, desc: it.desc, lv: `${have}<br>强度 ${st.lv}/${it.max}：${it.eff(st.lv)}`, btns: buy + up });
-      continue;
+      buy = st.n < it.multi ? btn('buyI', it.id, `${st.n ? '再买' : '购买'} 1 ${it.unit} ${it.cost} 🐟`, fish >= it.cost) : '';
+      have = st.n ? `已有 <b>${st.n}/${it.multi}</b> ${it.unit} · 等级 ${st.lv}/${it.max}` : `还没有（最多 ${it.multi} ${it.unit}）`;
+    } else {
+      buy = st.n ? '' : btn('buyI', it.id, `购买 ${it.cost} 🐟`, fish >= it.cost);
+      have = st.n ? `已拥有 · 等级 ${st.lv}/${it.max}` : '还没有';
     }
-    const buyLabel = it.pack === 1 ? `+1 个 ${it.cost} 🐟` : `+${it.pack} 次 ${it.cost} 🐟`;
-    const btns = btn('buyI', it.id, buyLabel, fish >= it.cost && st.uses < ITEM_CAP) + up;
-    h += card({ icon: it.id, name: it.name, py: it.py, desc: it.desc, lv: `剩余 <b>${st.uses}</b> 次 · 强度 ${st.lv}/${it.max}：${it.eff(st.lv)}`, btns });
+    h += card({ icon: it.id, name: it.name, py: it.py, desc: it.desc, lv: `${have}<br>${it.eff(st.lv)}${st.n && st.lv < it.max ? ` → 下一级：${it.eff(st.lv + 1)}` : ''}`, btns: buy + up });
   }
   if (G.unlockedItems < ITEMS.length) {
     const nxt = ITEMS[G.unlockedItems];
@@ -1828,7 +1859,8 @@ function renderShop() {
   for (const s of STATS) {
     const lv = G.stats[s.id], c = statCost(lv);
     const btns = lv < s.max ? btn('stat', s.id, `强化 ${c} 🐟`, fish >= c) : btn('', '', '已满级', false);
-    h += card({ icon: s.id, name: s.name, py: s.py, desc: s.desc, lv: `等级 ${lv}/${s.max}`, btns });
+    const look = s.id === 'catHp' ? `　造型：${catLookName(lv)}` : s.id === 'nestHp' ? `　造型：${nestLookName(lv)}${lv >= 3 ? ' · 导弹防御 ✓' : ''}` : '';
+    h += card({ icon: s.id, name: s.name, py: s.py, desc: s.desc, lv: `等级 ${lv}${Number.isFinite(s.max) ? '/' + s.max : ''}${look}`, btns });
   }
   const hurt = G.nestHp < nestMaxHp();
   h += card({ icon: 'repair', name: '修补猫窝', py: 'xiūbǔ māowō', desc: `恢复猫窝 ${REPAIR_HP} 点生命。`,
@@ -1868,7 +1900,7 @@ function showUnlock(id) {
       <img src="${ICONS.url[it.id]}" alt="">
       <div class="un-name">${it.name}</div>
       ${store.pinyin ? `<div class="un-py">${it.py}</div>` : ''}
-      <div class="un-desc">${it.desc}<br><b>商店价格：${it.cost} 🐟 / ${it.pack === 1 ? '个' : it.pack + '次'}</b></div>
+      <div class="un-desc">${it.desc}<br><b>商店价格：${it.cost} 🐟（买一次永久拥有）</b></div>
       <div class="sub">点击任意处继续</div>
     </div>`;
   el.classList.add('show');
@@ -1876,6 +1908,16 @@ function showUnlock(id) {
   announce(`解锁新道具：${it.name}`);
   clearTimeout(unlockTimer);
   unlockTimer = setTimeout(hideUnlock, 4200);
+}
+// 道具合成升级的庆祝画面（和武器合成同一个弹窗）
+function showItemMerge(id, from, to) {
+  const el = $('mergeFx'), it = itemDef(id);
+  el.innerHTML = `<div class="mfbox"><div class="mfrays"></div><div class="ttl">合成升级！</div><img src="${ICONS.url[id]}" alt="">
+    <div class="sub" style="font-size:24px;font-weight:900">Lv${from} → Lv${to}</div><div class="sub">${it.name}：${it.eff(to)}</div></div>`;
+  el.classList.add('show');
+  if (to >= 4) sfx.mergeBig(); else sfx.merge();
+  announce(`${it.name}升到 ${to} 级`);
+  clearTimeout(mergeTimer); mergeTimer = setTimeout(hideMerge, 2200);
 }
 function hideUnlock() { $('unlockFx').classList.remove('show'); }
 $('unlockFx').addEventListener('click', hideUnlock);
@@ -1891,15 +1933,12 @@ function shopAction(action, id) {
   else if (action === 'buyI') {
     if (!isItemUnlocked(id)) return;
     const it = itemDef(id), st = G.items[id];
-    if (it.multi) {
-      if (st.units.length < it.multi) { if (pay(it.cost)) st.units.push(it.pack); }
-      else { const i = st.units.indexOf(Math.min(...st.units)); if (st.units[i] < ITEM_CAP && pay(it.cost)) st.units[i] = Math.min(ITEM_CAP, st.units[i] + it.pack); }
-    } else if (st.uses < ITEM_CAP && pay(it.cost)) st.uses = Math.min(ITEM_CAP, st.uses + it.pack);
+    if (st.n < (it.multi || 1) && pay(it.cost)) st.n++;
   }
   else if (action === 'upI') {
     if (!isItemUnlocked(id)) return;
     const it = itemDef(id), st = G.items[id];
-    if (st.lv < it.max && pay(itemUpCost(it, st.lv))) st.lv++;
+    if (st.n && st.lv < it.max && pay(itemUpCost(it, st.lv))) { st.lv++; showItemMerge(id, st.lv - 1, st.lv); }
   }
   else if (action === 'stat') {
     const s = STATS.find(x => x.id === id), lv = G.stats[id];
@@ -1949,6 +1988,7 @@ document.addEventListener('click', e => {
     case 'toggleMute': store.mute = !store.mute; save(); refreshToggles(); break;
     case 'quizAns': answerQuiz(+b.dataset.i); break;
     case 'quizDone': finishQuiz(); break;
+    case 'examStart': if (exam) { exam.started = true; renderExam(); } break;
     case 'examAns': answerExam(+b.dataset.i); break;
     case 'examNext': nextExam(); break;
     case 'examRevive': reviveFromExam(); break;
@@ -2004,20 +2044,71 @@ function drawFence() {
     ctx.fillRect(x - 3, y - 12, 6, 16); ctx.strokeRect(x - 3, y - 12, 6, 16);
   }
 }
+// 猫窝和猫咪的造型：前 10 级每级换样子，10 级以后按等级换颜色
+const NEST_LOOKS = ['纸箱小窝', '加固小窝', '大猫窝', '花窗大猫窝', '猫别墅', '阳台猫别墅', '花园猫别墅', '猫城堡', '旗帜猫城堡', '高塔猫城堡', '黄金猫城堡'];
+const CAT_LOOKS = ['普通猫咪', '红围巾', '小斗篷', '斗篷和帽子', '铁头盔', '羽毛头盔', '骑士铠甲', '金头盔', '黄金铠甲', '王冠', '猫咪国王'];
+const nestLookName = lv => lv <= 10 ? NEST_LOOKS[lv] : `彩色猫城堡（第 ${lv - 9} 款）`;
+const catLookName = lv => lv <= 10 ? CAT_LOOKS[lv] : `彩色国王（第 ${lv - 9} 款）`;
+const lookHue = lv => `hsl(${((lv - 10) * 47 + 160) % 360} 70% 55%)`;
+
 function drawNest() {
-  const x = NEST.x, y = NEST.y, flash = L && L.nestFlash > 0;
+  const lv = G ? G.stats.nestHp : 0, x = NEST.x, y = NEST.y, flash = L && L.nestFlash > 0;
+  const tint = c => flash ? '#ffd0c0' : c;
+  const R = (rx, ry, w, h, fill, r = 4) => { ctx.fillStyle = tint(fill); ctx.beginPath(); ctx.roundRect(rx, ry, w, h, r); ctx.fill(); ctx.stroke(); };
+  const T = (pts, fill) => polyFill(pts, tint(fill));
+  const win = (wx, wy, w = 14, h = 14) => { R(wx - w / 2, wy - h / 2, w, h, '#bfe6ff', 3); ctx.beginPath(); ctx.moveTo(wx, wy - h / 2); ctx.lineTo(wx, wy + h / 2); ctx.moveTo(wx - w / 2, wy); ctx.lineTo(wx + w / 2, wy); ctx.stroke(); };
+  const door = (dx, dy, r = 19) => { ctx.fillStyle = '#5b3d28'; ctx.beginPath(); ctx.arc(dx, dy, r, Math.PI, 0); ctx.lineTo(dx + r, dy); ctx.lineTo(dx - r, dy); ctx.fill(); ctx.stroke(); ell(dx, dy - 2, r * 0.8, r * 0.26, '#ffadc6'); };
+  const sign = (sx, sy, w = 44) => { R(sx - w / 2, sy - 10, w, 20, '#fff6df', 5); ctx.fillStyle = OUT; ctx.font = 'bold 14px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('猫窝', sx, sy + 1); };
+  const flag = (fx, fy, col) => { ctx.beginPath(); ctx.moveTo(fx, fy); ctx.lineTo(fx, fy - 26); ctx.stroke(); T([fx, fy - 26, fx + 18 + Math.sin(performance.now() / 200) * 2, fy - 21, fx, fy - 15], col); };
+  const crenel = (cx0, cy0, w, n, col) => { const k = w / (n * 2 - 1); for (let i = 0; i < n; i++) R(cx0 + i * 2 * k, cy0 - 8, k, 9, col, 1); };
+  const tower = (tx, ty, w, h, wall, roof) => { R(tx - w / 2, ty - h, w, h, wall, 3); T([tx - w / 2 - 5, ty - h, tx, ty - h - w * 0.9, tx + w / 2 + 5, ty - h], roof); win(tx, ty - h * 0.55, 9, 12); };
   ctx.lineWidth = 3; ctx.strokeStyle = OUT;
-  ell(x, y + 34, 54, 14, 'rgba(0,0,0,.15)');
-  ctx.fillStyle = flash ? '#ffd0c0' : '#d9a765';
-  ctx.beginPath(); ctx.roundRect(x - 44, y - 18, 88, 54, 8); ctx.fill(); ctx.stroke();
-  ctx.fillStyle = flash ? '#ffb0a0' : '#e8743b';
-  ctx.beginPath(); ctx.moveTo(x - 56, y - 16); ctx.lineTo(x, y - 58); ctx.lineTo(x + 56, y - 16); ctx.closePath(); ctx.fill(); ctx.stroke();
-  ctx.fillStyle = '#5b3d28';
-  ctx.beginPath(); ctx.arc(x, y + 36, 19, Math.PI, 0); ctx.lineTo(x + 19, y + 36); ctx.lineTo(x - 19, y + 36); ctx.fill(); ctx.stroke();
-  ell(x, y + 34, 15, 5, '#ffadc6');
-  ctx.fillStyle = '#fff6df'; ctx.beginPath(); ctx.roundRect(x - 22, y - 12, 44, 20, 5); ctx.fill(); ctx.stroke();
-  ctx.fillStyle = OUT; ctx.font = 'bold 14px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  ctx.fillText('猫窝', x, y - 1);
+  ell(x, y + 34, 54 + Math.min(lv, 10) * 4, 14, 'rgba(0,0,0,.15)');
+  if (lv <= 1) {   // 纸箱小窝 / 加固小窝（钉了木板）
+    R(x - 44, y - 18, 88, 54, '#d9a765', 8);
+    if (lv === 1) { ctx.save(); ctx.strokeStyle = '#8a5a2c'; ctx.lineWidth = 3; for (const yy of [y - 4, y + 12]) { ctx.beginPath(); ctx.moveTo(x - 42, yy); ctx.lineTo(x + 42, yy); ctx.stroke(); } ctx.restore(); for (const s2 of [-1, 1]) ell(x + s2 * 36, y - 4, 2, 2, OUT); }
+    T([x - 56, y - 16, x, y - 58, x + 56, y - 16], lv === 1 ? '#c8562a' : '#e8743b');
+    door(x, y + 36); sign(x, y - 1);
+  } else if (lv <= 3) {   // 大猫窝（烟囱、屋瓦；3 级加花窗）
+    R(x + 26, y - 68, 12, 28, '#9a6b4a', 2);
+    R(x - 56, y - 22, 112, 60, '#e2b77a', 8);
+    T([x - 68, y - 20, x, y - 76, x + 68, y - 20], '#d4552f');
+    ctx.save(); ctx.strokeStyle = 'rgba(74,52,35,.45)'; ctx.lineWidth = 2;
+    for (let i = 1; i < 4; i++) { const yy = y - 20 - i * 14, hw = 68 * (1 - i * 14 / 56); ctx.beginPath(); ctx.moveTo(x - hw, yy); ctx.lineTo(x + hw, yy); ctx.stroke(); }
+    ctx.restore();
+    if (lv === 3) for (const wx of [x - 36, x + 36]) { win(wx, y + 2); R(wx - 11, y + 10, 22, 6, '#8a5a3a', 2); ['#ff8fb1', '#ffd84a', '#ff6b5e'].forEach((fc, k) => ell(wx - 6 + k * 6, y + 8, 3, 3, fc)); }
+    door(x, y + 38, 20); sign(x, y - 6);
+  } else if (lv <= 6) {   // 猫别墅：两层（5 级加阳台，6 级加花园）
+    if (lv >= 6) {
+      for (const s2 of [-1, 1]) { ell(x + s2 * 80, y + 28, 15, 12, '#5fae3c', OUT); ell(x + s2 * 96, y + 22, 11, 10, '#7ed957', OUT); }
+      ctx.save(); ctx.strokeStyle = '#fff'; ctx.lineWidth = 3;
+      for (let k = -104; k <= 104; k += 13) if (Math.abs(k) > 30) { ctx.beginPath(); ctx.moveTo(x + k, y + 48); ctx.lineTo(x + k, y + 34); ctx.stroke(); }
+      ctx.beginPath(); ctx.moveTo(x - 104, y + 41); ctx.lineTo(x - 30, y + 41); ctx.moveTo(x + 30, y + 41); ctx.lineTo(x + 104, y + 41); ctx.stroke();
+      ctx.restore();
+    }
+    R(x - 62, y - 14, 124, 52, '#f2d9a6', 6);
+    R(x - 46, y - 54, 92, 42, '#f6e2b8', 6);
+    T([x - 58, y - 52, x, y - 94, x + 58, y - 52], '#c8402d');
+    win(x - 40, y + 8); win(x + 40, y + 8); win(x - 22, y - 34, 13, 13); win(x + 22, y - 34, 13, 13);
+    if (lv >= 5) { R(x - 50, y - 18, 100, 6, '#8a5a3a', 2); ctx.save(); ctx.lineWidth = 2; for (let k = -46; k <= 46; k += 10) { ctx.beginPath(); ctx.moveTo(x + k, y - 18); ctx.lineTo(x + k, y - 27); ctx.stroke(); } ctx.beginPath(); ctx.moveTo(x - 50, y - 27); ctx.lineTo(x + 50, y - 27); ctx.stroke(); ctx.restore(); }
+    door(x, y + 38, 18); sign(x, y - 68, 40);
+  } else {   // 猫城堡（8 级插旗，9 级加中央高塔，10 级黄金；之后按等级换色）
+    const over10 = lv > 10, gold = lv >= 10;
+    const wall = over10 ? lookHue(lv) : gold ? '#f0c95a' : '#b9b3a8', roof = gold ? '#ffb300' : '#4f7fd6', flagC = over10 ? '#fff' : gold ? '#ff5e5e' : '#e8483f';
+    if (lv >= 9) { tower(x, y - 30, 34, 42, wall, roof); flag(x, y - 30 - 42 - 34 * 0.9, flagC); }
+    for (const s2 of [-1, 1]) tower(x + s2 * 64, y + 38, 30, 86, wall, roof);
+    if (lv >= 8) for (const s2 of [-1, 1]) flag(x + s2 * 64, y + 38 - 86 - 30 * 0.9, flagC);
+    R(x - 52, y - 30, 104, 68, wall, 3); crenel(x - 52, y - 30, 104, 7, wall);
+    ctx.save(); ctx.strokeStyle = 'rgba(74,52,35,.3)'; ctx.lineWidth = 1.5;
+    for (let r0 = 0; r0 < 3; r0++) for (let k = 0; k < 5; k++) ctx.strokeRect(x - 48 + k * 19 + (r0 % 2) * 9, y - 22 + r0 * 13, 17, 11);
+    ctx.restore();
+    door(x, y + 38, 20); sign(x, y - 10, 44);
+  }
+  // 猫窝护盾（地上掉落的增益）
+  if (L && L.buffT && L.buffT.nestShield > 0) {
+    const t = L.buffT.nestShield, blink = t < 2 && Math.floor(t * 8) % 2;
+    if (!blink) { ctx.lineWidth = 3; ell(x, y - 12, 104 + Math.min(lv, 10) * 4, 92 + Math.min(lv, 10) * 4, 'rgba(79,183,255,.16)', 'rgba(79,183,255,.85)'); }
+  }
 }
 function drawTurret(t) {
   ctx.lineWidth = 2.5; ctx.strokeStyle = OUT;
@@ -2135,15 +2226,31 @@ function drawCat(c) {
   ctx.beginPath(); ctx.moveTo(-10, 10); ctx.quadraticCurveTo(-24, 8, -22 + tw * 0.4, -6 + tw); ctx.stroke();
   ctx.lineWidth = 3; ctx.strokeStyle = DARK; ctx.stroke();
   ctx.lineWidth = 2.5; ctx.strokeStyle = OUT;
+  // 装备：猫咪护甲等级越高，装备越多（前 10 级换装备，之后换颜色）
+  const gl = G.stats.catHp, hueC = gl > 10 ? lookHue(gl) : null;
+  const capeC = hueC || (gl >= 9 ? '#7b3fb8' : gl >= 7 ? '#3f6fd8' : '#d8402d');
+  const metal = gl > 10 ? '#ffd24a' : gl >= 8 ? '#ffd24a' : '#c9d1db';
+  if (gl >= 2) {   // 斗篷（在身体后面）
+    const flutter = Math.sin(performance.now() / 160) * 2 + (c.moving ? 3 : 0);
+    polyFill([-9, -3, 8, -3, 6, 14, -16 - flutter, 18, -21 - flutter, 7], capeC);
+    if (gl >= 9) { ctx.save(); ctx.strokeStyle = '#fff'; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(6, 14); ctx.lineTo(-16 - flutter, 18); ctx.stroke(); ctx.restore(); }
+  }
   // 脚
   const step = c.moving ? Math.sin(c.walk) * 3 : 0;
   ell(-6 + step, 16, 5, 3.5, L.redRageT > 0 ? '#ffd8d8' : '#fff', OUT); ell(6 - step, 16, 5, 3.5, L.redRageT > 0 ? '#ffd8d8' : '#fff', OUT);
   // 身体
   ell(0, 6, 13, 11, FUR, OUT);
   ell(0, 9, 7, 6, L.redRageT > 0 ? '#ff9e9e' : '#fff');
+  if (gl >= 6) { ctx.save(); ctx.lineWidth = 2; ell(2, 7, 10, 9, metal, OUT); ctx.beginPath(); ctx.moveTo(2, -1); ctx.lineTo(2, 15); ctx.stroke(); ctx.restore(); }   // 铠甲
   // 项圈和铃铛
   ctx.strokeStyle = L.redRageT > 0 ? '#ffe066' : '#2bb5a0'; ctx.lineWidth = 4; ctx.beginPath(); ctx.moveTo(-10, -1); ctx.quadraticCurveTo(0, 4, 10, -1); ctx.stroke();
   ctx.lineWidth = 1.5; ell(0, 3, 3, 3, '#ffd84a', OUT);
+  if (gl >= 1 && L.redRageT <= 0) {   // 围巾
+    ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.moveTo(-10, -1); ctx.quadraticCurveTo(0, 4, 10, -1);
+    ctx.strokeStyle = OUT; ctx.lineWidth = 8; ctx.stroke(); ctx.strokeStyle = capeC; ctx.lineWidth = 5; ctx.stroke();
+    ctx.lineWidth = 2; ctx.strokeStyle = OUT; polyFill([-7, 1, -13, 11, -6, 11], capeC);
+  }
   ctx.lineWidth = 2.5; ctx.strokeStyle = OUT;
   // 耳朵
   for (const s of [-1, 1]) {
@@ -2171,6 +2278,24 @@ function drawCat(c) {
   }
   ctx.fillStyle = '#ff8fa3'; ctx.beginPath(); ctx.moveTo(2, -9.5); ctx.lineTo(6, -9.5); ctx.lineTo(4, -7.5); ctx.closePath(); ctx.fill();
   ctx.strokeStyle = OUT; ctx.lineWidth = 1.2; ctx.beginPath(); ctx.moveTo(4, -7.5); ctx.quadraticCurveTo(2, -4.5, 0.5, -6.5); ctx.moveTo(4, -7.5); ctx.quadraticCurveTo(6, -4.5, 7.5, -6.5); ctx.stroke();
+  // 头饰：帽子 → 头盔 → 羽毛 → 金头盔 → 王冠
+  ctx.lineWidth = 2.2; ctx.strokeStyle = OUT;
+  if (gl === 3) {
+    ctx.fillStyle = '#3f8fe0'; ctx.beginPath(); ctx.arc(0, -20, 12, Math.PI, 0); ctx.closePath(); ctx.fill(); ctx.stroke();
+    polyFill([8, -21, 23, -20, 23, -17, 7, -18], '#2f6fb8');
+  } else if (gl >= 4 && gl <= 8) {
+    ctx.fillStyle = gl >= 7 ? '#ffd24a' : '#c9d1db';
+    ctx.beginPath(); ctx.ellipse(0, -18, 16, 11, 0, Math.PI, 0); ctx.closePath(); ctx.fill(); ctx.stroke();
+    ctx.fillRect(6, -19, 3, 9); ctx.strokeRect(6, -19, 3, 9);
+    for (const s2 of [-1, 1]) {   // 猫耳朵从头盔里钻出来
+      ctx.fillStyle = FUR; ctx.beginPath(); ctx.moveTo(s2 * 6, -24); ctx.lineTo(s2 * 14, -32); ctx.lineTo(s2 * 15, -20); ctx.closePath(); ctx.fill(); ctx.stroke();
+    }
+    if (gl >= 5) ellRot(-1, -34, 4, 10, -0.4, gl >= 7 ? '#ffffff' : '#e8483f', OUT);
+  } else if (gl >= 9) {
+    const crown = gl > 10 ? '#ffd24a' : '#ffd24a', k = gl >= 10 ? 1.25 : 1;
+    polyFill([-10 * k, -21, -10 * k, -21 - 11 * k, -5 * k, -21 - 6 * k, 0, -21 - 13 * k, 5 * k, -21 - 6 * k, 10 * k, -21 - 11 * k, 10 * k, -21], crown);
+    ell(0, -25, 2.4, 2.4, hueC || '#e8483f'); if (gl >= 10) { ell(-6, -24, 2, 2, '#4fc3ff'); ell(6, -24, 2, 2, '#7ed957'); }
+  }
   ctx.restore();
   // 枪
   const [gx, gy] = ICONS.grip[G.eq.id], gs = 0.62;
@@ -2520,6 +2645,16 @@ function drawTierBadge(x, yMid, t) {
   ctx.strokeText(label, x + w / 2, yMid + 1); ctx.fillStyle = '#fff'; ctx.fillText(label, x + w / 2, yMid + 1);
 }
 function drawBullet(b) {
+  if (b.kind === 'missile') {   // 导弹：白色弹身、红色弹头和尾翼，尾部喷火
+    ctx.save(); ctx.translate(b.x, b.y); ctx.rotate(Math.atan2(b.vy, b.vx));
+    ell(-15, 0, 7 + Math.random() * 3, 3.5, '#ffb347'); ell(-13, 0, 4, 2, '#fff7b0');
+    ctx.lineWidth = 1.5; ctx.strokeStyle = OUT;
+    polyFill([-9, -7, -3, 0, -9, 7], '#c8402d');
+    ctx.fillStyle = '#eef1f4'; ctx.beginPath(); ctx.roundRect(-10, -3.5, 18, 7, 3); ctx.fill(); ctx.stroke();
+    polyFill([8, -3.5, 14, 0, 8, 3.5], '#e8483f');
+    ctx.restore();
+    return;
+  }
   if (b.tier > 0) { const ga = ctx.globalAlpha; ctx.globalAlpha = ga * 0.35; ell(b.x, b.y, b.r * 2.4 + b.tier, b.r * 2.4 + b.tier, tierColor(b.tier)); ctx.globalAlpha = ga; }
   ctx.lineWidth = 1.5; ctx.strokeStyle = OUT;
   if (b.kind === 'laser') {
@@ -2556,6 +2691,12 @@ function outlined(text, x, y, size, color = '#fff', align = 'center') {
   ctx.strokeText(text, x, y); ctx.fillStyle = color; ctx.fillText(text, x, y);
 }
 function updateItemBar() {
+  const ms = ibEls.missile, mOk = G.stats.nestHp >= 3, msig = `${mOk}|${L.missileUsed}`;
+  if (ms.sig !== msig) {
+    ms.sig = msig; ms.el.style.display = mOk ? '' : 'none';
+    const ct = ms.el.querySelector('.ct'); ct.textContent = L.missileUsed ? '×0' : '×1'; ct.classList.toggle('zero', L.missileUsed);
+    ms.el.classList.toggle('cooling', L.missileUsed);
+  }
   const eq = G.eq, w = ibEls.weapon, wsig = eq.id + ':' + eq.tier;
   if (w.sig !== wsig) {
     w.sig = wsig;
@@ -2565,17 +2706,18 @@ function updateItemBar() {
   for (const it of ITEMS) {
     const x = ibEls[it.id], st = G.items[it.id], on = L.on[it.id] || 0;
     const unlocked = isItemUnlocked(it.id);
-    const cool = it.id === 'catnip' ? Math.ceil(Math.max(0, L.catnipT)) : it.id === 'shockwave' ? Math.ceil(Math.max(0, L.shockwaveCd)) : 0;
-    const left = itemLeft(it.id);
-    const show = unlocked && (it.manual ? (st.uses > 0 || cool > 0) : on > 0);
-    const sig = `${show}|${left}|${on}|${cool}`;
+    const active = it.id === 'catnip' && L.catnipT > 0;
+    const cool = it.id === 'catnip' ? Math.ceil(Math.max(0, active ? L.catnipT : L.catnipCd)) : it.id === 'shockwave' ? Math.ceil(Math.max(0, L.shockwaveCd)) : 0;
+    const show = unlocked && (it.manual ? st.n > 0 : on > 0);
+    const sig = `${show}|${st.lv}|${on}|${cool}|${active}`;
     if (x.sig === sig) continue;
     x.sig = sig;
     x.el.style.display = show ? '' : 'none';
     const ct = x.el.querySelector('.ct');
-    ct.textContent = `×${left}`; ct.classList.toggle('zero', left === 0);
+    ct.textContent = `Lv${st.lv}`; ct.classList.remove('zero');
     const num = x.el.querySelector('.num'); if (num) num.textContent = on > 1 ? on + it.unit : '';
-    x.el.classList.toggle('on', it.manual ? cool > 0 : on > 0);
+    x.el.classList.toggle('on', it.manual ? active : on > 0);
+    x.el.classList.toggle('cooling', it.manual && cool > 0 && !active);
     const cd = x.el.querySelector('.cd');
     cd.textContent = cool > 0 ? cool + '秒' : ''; cd.style.display = cool > 0 ? 'flex' : 'none';
   }

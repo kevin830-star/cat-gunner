@@ -39,26 +39,29 @@ const MERGE_NEED = [2, 2, 2, 3, 3];
 // ---------- 道具 ----------
 // 解锁顺序就是下面的排列顺序：猫薄荷开局就有，之后每打败一个头目按顺序解锁下一个（炮塔、冲击波……）
 // pack：一次购买得到的使用次数；manual 为手动使用道具，其余每关开始时自动消耗 1 次
-const ITEM_CAP = 9;
+// 道具买一次永久拥有、不限次数；再买一份可以「合成升级」，最高 5 级
+// manual：手动使用的道具（用完后要冷却 cool(lv) 秒）；multi：最多能同时拥有几个（炮塔、飞镖）
 const ITEMS = [
-  { id: 'catnip', name: '猫薄荷', py: 'māo bòhe', desc: '手动使用（空格键或按钮）：一段时间内移动和射击都变快。每用一次消耗 1 次。', manual: true, key: '空格', pack: 3, cost: 45, max: 3,
-    eff: lv => `持续 ${5 + 2 * lv} 秒` },
-  { id: 'turret', name: '自动炮塔', py: 'zìdòng pàotǎ', desc: '在猫窝旁自动射击。每买一次多一座（最多同时 4 座），每座能用 3 关。升级会让所有炮塔更强。', multi: 4, unit: '座',
-    pack: 3, cost: 70, max: 3, eff: lv => lv === 1 ? '基础强度' : `伤害 +${35 * (lv - 1)}%，射速 +${Math.round(100 / (1 - 0.1 * (lv - 1)) - 100)}%` },
-  { id: 'shockwave', name: '冲击波', py: 'chōngjībō', desc: '手动使用（F 键或按钮）：释放强力电磁气浪，全屏敌人被震晕并向后震退五格（500 距离），同时震碎敌方弹幕。', manual: true, key: 'F', pack: 1, cost: 300, max: 3,
-    eff: lv => `全屏震退 5 格 · 眩晕 ${(1.2 + 0.4 * (lv - 1)).toFixed(1)} 秒${lv > 1 ? ` · 伤害 +${35 * (lv - 1)}%` : ''}` },
-  { id: 'fence', name: '铁丝围栏', py: 'tiěsī wéilán', desc: '每关开始时围住猫窝，靠近的敌人会变慢。每关消耗 1 次。', pack: 3, cost: 60, max: 3, eff: lv => `减速 ${20 + 10 * lv}%` },
-  { id: 'magnet', name: '磁铁项圈', py: 'cítiě xiàngquān', desc: '每关开始时戴上，从更远的地方吸来小鱼干。每关消耗 1 次。', pack: 3, cost: 40, max: 3, eff: lv => `吸取范围 ${60 + 55 * lv}` },
-  { id: 'shuriken', name: '旋转飞镖', py: 'xuánzhuǎn fēibiāo', desc: '绕着猫窝高速旋转，切碎靠近的敌人。每买一次多一枚（最多同时 4 枚），每枚能用 2 关。升级会让所有飞镖更强。', multi: 4, unit: '枚',
-    pack: 2, cost: 80, max: 3, eff: lv => lv === 1 ? '基础强度' : `伤害 +${35 * (lv - 1)}%，转速 +${12 * (lv - 1)}%` },
-  { id: 'lightning', name: '闪电云', py: 'shǎndiàn yún', desc: '每关开始时在猫窝上空聚起雷云，定时劈中附近的敌人。每关消耗 1 次。', pack: 2, cost: 130, max: 3, eff: lv => `每次劈 ${lv + 1} 个敌人` },
-  { id: 'helper', name: '小猫助手', py: 'xiǎomāo zhùshǒu', desc: '每关开始时请来小猫，跟着你一起开枪。每关消耗 1 次。', pack: 2, cost: 140, max: 2, eff: lv => `${lv} 只小猫` },
+  { id: 'catnip', name: '猫薄荷', py: 'māo bòhe', desc: '永久拥有。手动使用（空格键或按钮）：一段时间内移动和射击都变快，效果结束后冷却一会儿可以再用。', manual: true, key: '空格', cost: 45, max: 5,
+    cool: lv => 22 - 2 * lv, eff: lv => `持续 ${5 + 2 * lv} 秒 · 冷却 ${22 - 2 * lv} 秒` },
+  { id: 'turret', name: '自动炮塔', py: 'zìdòng pàotǎ', desc: '永久拥有，在猫窝旁自动射击。每买一座多一座（最多 4 座）；合成升级让所有炮塔更强。', multi: 4, unit: '座', cost: 70, max: 5,
+    eff: lv => lv === 1 ? '基础强度' : `伤害 +${35 * (lv - 1)}%，射速 +${Math.round(100 / (1 - 0.08 * (lv - 1)) - 100)}%` },
+  { id: 'shockwave', name: '冲击波', py: 'chōngjībō', desc: '永久拥有。手动使用（F 键或按钮）：全屏敌人被震晕并震退五格，同时震碎敌方弹幕；用后冷却一会儿可以再用。', manual: true, key: 'F', cost: 300, max: 5,
+    cool: lv => 32 - 3 * lv, eff: lv => `眩晕 ${(1.2 + 0.4 * (lv - 1)).toFixed(1)} 秒 · 冷却 ${32 - 3 * lv} 秒${lv > 1 ? ` · 伤害 +${35 * (lv - 1)}%` : ''}` },
+  { id: 'fence', name: '铁丝围栏', py: 'tiěsī wéilán', desc: '永久拥有。每关围住猫窝，靠近的敌人会变慢。', cost: 60, max: 5, eff: lv => `减速 ${Math.round(100 * (0.12 + 0.08 * lv))}%` },
+  { id: 'magnet', name: '磁铁项圈', py: 'cítiě xiàngquān', desc: '永久拥有。从更远的地方吸来小鱼干。', cost: 40, max: 5, eff: lv => `吸取范围 ${60 + 55 * lv}` },
+  { id: 'shuriken', name: '旋转飞镖', py: 'xuánzhuǎn fēibiāo', desc: '永久拥有，绕着猫窝高速旋转切碎敌人。每买一枚多一枚（最多 4 枚）；合成升级让所有飞镖更强。', multi: 4, unit: '枚', cost: 80, max: 5,
+    eff: lv => lv === 1 ? '基础强度' : `伤害 +${35 * (lv - 1)}%，转速 +${12 * (lv - 1)}%` },
+  { id: 'lightning', name: '闪电云', py: 'shǎndiàn yún', desc: '永久拥有。猫窝上空的雷云定时劈中附近的敌人。', cost: 130, max: 5,
+    eff: lv => `每次劈 ${lv + 1} 个敌人 · 每 ${Math.max(1.2, 3.4 - 0.4 * lv).toFixed(1)} 秒` },
+  { id: 'helper', name: '小猫助手', py: 'xiǎomāo zhùshǒu', desc: '永久拥有。小猫跟着你一起开枪，3 级起变成两只。', cost: 140, max: 5,
+    eff: lv => `${lv >= 3 ? 2 : 1} 只小猫${lv > 1 ? ` · 伤害 +${35 * (lv - 1)}%` : ''}` },
 ];
 
 const STATS = [
-  { id: 'catHp', name: '猫咪生命', py: 'māomī shēngmìng', desc: '猫咪生命上限 +25（每关开始自动回满）。', max: 5 },
+  { id: 'catHp', name: '猫咪护甲', py: 'māomī hùjiǎ', desc: '猫咪生命上限 +25（每关开始自动回满），不限等级。前 10 级每级换一身新装备，之后换颜色。', max: Infinity },
   { id: 'catSpd', name: '猫咪速度', py: 'māomī sùdù', desc: '猫咪跑得更快。', max: 5 },
-  { id: 'nestHp', name: '加固猫窝', py: 'jiāgù māowō', desc: '猫窝生命上限 +100。', max: 5 },
+  { id: 'nestHp', name: '加固猫窝', py: 'jiāgù māowō', desc: '猫窝生命上限 +100，不限等级。前 10 级每级换新样子（大猫窝、猫别墅、猫城堡……），之后换颜色。3 级起每关可用一次「导弹防御」。', max: Infinity },
 ];
 
 // w：出现权重；from：第几关开始出现；group：一次出现几只
@@ -97,6 +100,7 @@ const BUFFS = [
   { id: 'freeze', ch: '冰', name: '冰冻', py: 'bīngdòng', tip: '敌人被冻住', color: '#45c4d8', dur: 4 },
   { id: 'heal', ch: '心', name: '爱心', py: 'àixīn', tip: '恢复生命', color: '#ff7fa8', dur: 0 },
   { id: 'magnet', ch: '吸', name: '吸引', py: 'xīyǐn', tip: '吸来所有小鱼干', color: '#a57cf5', dur: 0 },
+  { id: 'nestShield', ch: '护', name: '猫窝护盾', py: 'māowō hùdùn', tip: '猫窝暂时不会受伤', color: '#4fb7ff', dur: 10 },
 ];
 const BUFF_DROP_CHANCE = 0.06;
 

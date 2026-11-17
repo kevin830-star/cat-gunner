@@ -58,6 +58,7 @@ const SFX = (() => {
       noise(0.65, { freq: 2800, to: 140, type: 'bandpass', q: 0.9, vol: 0.7 });
       arp([880, 1175, 1568], 0.05, { type: 'triangle', vol: 0.16, dur: 0.18 });
     }],
+    missile: [0, () => { noise(0.8, { freq: 600, to: 3000, type: 'bandpass', vol: 0.35 }); tone(220, 0.6, { type: 'sawtooth', to: 90, vol: 0.15 }); arp([660, 880, 1100], 0.06, { type: 'triangle', vol: 0.1, dur: 0.12 }); }],
     turret: [60, () => { tone(1300, 0.06, { type: 'triangle', to: 600, vol: 0.09 }); noise(0.03, { freq: 4000, type: 'highpass', vol: 0.06 }); }],
     helper: [70, () => tone(1700, 0.05, { to: 900, vol: 0.05 })],
     shuriken: [70, () => { tone(2500, 0.08, { type: 'triangle', to: 3400, vol: 0.08 }); noise(0.06, { freq: 6000, type: 'highpass', vol: 0.14 }); }],

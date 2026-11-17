@@ -124,6 +124,16 @@ const ICONS = (() => {
       poly(pts, '#ffe066');
       circ(32, 32, 5, '#fff', false);
     },
+    // 导弹防御：一枚斜向上飞的导弹
+    missile() {
+      c.translate(32, 32); c.rotate(-0.8); c.translate(-32, -32);
+      c.save(); c.fillStyle = '#ffb347'; c.beginPath(); c.ellipse(13, 32, 10, 5, 0, 0, TAU); c.fill();
+      c.fillStyle = '#ffe066'; c.beginPath(); c.ellipse(15, 32, 5, 3, 0, 0, TAU); c.fill(); c.restore();
+      poly([20, 21, 28, 32, 20, 43], '#c8402d');
+      rr(20, 26, 30, 12, 5, '#eef1f4');
+      rr(33, 26, 5, 12, 1, '#e8483f');
+      poly([50, 26, 60, 32, 50, 38], '#e8483f');
+    },
     // 猫薄荷：一枝带小花的绿叶
     catnip() {
       c.beginPath(); c.moveTo(32, 58); c.quadraticCurveTo(29, 38, 32, 18); c.stroke();
