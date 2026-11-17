@@ -1646,13 +1646,20 @@ function reviveFromExam() {
 }
 
 // ---------- 商店里的汉字小游戏 ----------
+// 小游戏的六种题型：每轮 5 题，每题都是不同的题型；每关轮流空出一种，所以连续几关会练到全部题型
 const MINI_TYPES = [
   { id: 'pic', name: '看图选字', tip: '看图片，选出正确的字。' },
   { id: 'comp', name: '偏旁拼字', tip: '两个部分合起来是哪个字？' },
-  { id: 'tone', name: '选声调', tip: '这个字读第几声？选出正确的拼音。' },
-  { id: 'idiom', name: '成语挑战', tip: '根据意思补全四字成语。' },
-  { id: 'poem', name: '古诗名句', tip: '选出古诗中空缺的字词。' },
+  { id: 'word', name: '词语填空', tip: '选出句子里空缺的词语。' },
+  { id: 'idiom', name: '成语填空', tip: '根据意思补全四字成语。' },
+  { id: 'pron', name: '读音选择', tip: '选出正确的读音。' },
+  { id: 'poem', name: '古诗填空', tip: '选出古诗中空缺的字词。' },
 ];
+const miniTypeDef = id => MINI_TYPES.find(t => t.id === id);
+function miniRound() {
+  const skip = MINI_TYPES[G.level % MINI_TYPES.length].id;
+  return shuffle(MINI_TYPES.filter(t => t.id !== skip)).map(t => t.id).slice(0, MINI_TOTAL);
+}
 const TONES = { a: 'āáǎà', e: 'ēéěè', i: 'īíǐì', o: 'ōóǒò', u: 'ūúǔù', 'ü': 'ǖǘǚǜ' };
 function toneVariants(py) {
   for (let i = 0; i < py.length; i++) for (const base in TONES) {
@@ -1660,7 +1667,6 @@ function toneVariants(py) {
   }
   return null;
 }
-const miniType = () => MINI_TYPES[(G.level - 1) % MINI_TYPES.length];
 const miniReward = () => 12 + 3 * G.level;
 const MINI_TOTAL = 5, MINI_PERFECT = 25;   // 每次 5 题；全对额外奖励
 let mini = null;
@@ -1682,6 +1688,17 @@ function makeMiniQuestion(type) {
     return { prompt: `<div class="qsent">${q.s.replace('____', '<span class="blank">&nbsp;</span>')}</div><div class="qhint">${q.en}</div>`,
       opts: shuffle(q.opts.map((o, i) => ({ t: o.split('|')[0], ok: i === 0 }))), info: `${q.s.replace('____', ans)} (${q.py})`, say: q.s.replace('____', ans).replace(/（.*?）/g, '') };
   }
+  if (type === 'word') {
+    const q = pickFromBank(FILL_QUIZ, 'mini_word');
+    const ans = q.opts[0].split('|')[0];
+    return { prompt: `<div class="qsent">${q.s.replace('____', '<span class="blank">&nbsp;</span>')}</div><div class="qhint">${q.en}</div>`,
+      opts: shuffle(q.opts.map((o, i) => ({ t: o.split('|')[0], ok: i === 0 }))), info: `${q.s.replace('____', ans)} (${q.py})`, say: q.s.replace('____', ans) };
+  }
+  if (type === 'pron' && Math.random() < 0.5) {   // 读音选择：一半是多音字/词语里的读音，一半是单字声调
+    const q = pickFromBank(PRONOUNCE_QUIZ, 'mini_pron');
+    return { prompt: `<div class="qsent">${q.w}</div><div class="qhint">「<b>${q.target}</b>」在这里读什么？（${q.en}）</div>`,
+      opts: shuffle(q.opts.map((py, i) => ({ t: py, ok: i === 0 }))), info: `「${q.target}」读 ${q.opts[0]} · ${q.en}`, say: q.w.replace(/（.*?）/g, '') };
+  }
   if (type === 'poem') {
     const q = pickFromBank(POEM_QUIZ, 'mini_poem');
     const ans = q.opts[0].split('|')[0];
@@ -1697,8 +1714,8 @@ function openMini() {
   if (G.miniPlayed) return;
   G.miniPlayed = true;
   saveRun();
-  const type = miniType();
-  mini = { type, i: 0, right: 0, total: MINI_TOTAL, q: makeMiniQuestion(type.id), chosen: -1 };
+  const types = miniRound();
+  mini = { types, type: miniTypeDef(types[0]), i: 0, right: 0, total: types.length, q: makeMiniQuestion(types[0]), chosen: -1 };
   setState('mini');
   renderMini();
   show('mini');
@@ -1731,7 +1748,7 @@ function answerMini(i) {
 }
 function nextMini() {
   const m = mini;
-  if (m.i + 1 < m.total) { m.i++; m.chosen = -1; m.q = makeMiniQuestion(m.type.id); return renderMini(); }
+  if (m.i + 1 < m.total) { m.i++; m.chosen = -1; m.type = miniTypeDef(m.types[m.i]); m.q = makeMiniQuestion(m.types[m.i]); return renderMini(); }
   const perfect = m.right === m.total;
   const reward = m.right * miniReward() + (perfect ? MINI_PERFECT : 0);
   G.fish += reward;
@@ -1750,13 +1767,13 @@ function card({ icon, name, py, desc, lv, btns, equipped, locked }) {
 }
 const btn = (action, id, label, enabled = true) => `<button data-action="${action}" data-id="${id}" ${enabled ? '' : 'disabled'}>${label}</button>`;
 function renderShop() {
-  const fish = G.fish, mt = miniType();
+  const fish = G.fish;
   const starRow = n => [0, 1, 2].map(i => `<span class="${i < n ? '' : 'off'}">★</span>`).join('');
   const totalStars = Object.values(G.stars).reduce((a, b) => a + b, 0);
   let h = `<div class="shophead"><h2>第 ${G.level} 关完成！<span class="stars">${starRow(G.lastStars)}</span></h2>
     <div class="fishbar">🐟 ${fish}</div></div>
     <div style="font-size:13px;margin:2px 0 8px">过关奖励 +${G.lastBonus}${G.lastStarBonus ? `, 星级奖励 +${G.lastStarBonus}` : ''} 🐟 · 累计 ★ ${totalStars} · 下一关开始猫咪生命自动回满 (${catMaxHp()} HP)</div>
-    <div class="minicard"><div class="txt"><b>汉字小游戏 · ${mt.name}</b><br>答 ${MINI_TOTAL} 道题，每答对一题 +${miniReward()} 🐟，全对再 +${MINI_PERFECT} 🐟。</div>${btn('mini', '', G.miniPlayed ? '已玩过' : '开始', !G.miniPlayed)}</div>`;
+    <div class="minicard"><div class="txt"><b>汉字小游戏 · 综合练习</b><br>${MINI_TOTAL} 道不同题型（识字、偏旁、词语、成语、读音、古诗轮流），每答对一题 +${miniReward()} 🐟，全对再 +${MINI_PERFECT} 🐟。</div>${btn('mini', '', G.miniPlayed ? '已玩过' : '开始', !G.miniPlayed)}</div>`;
 
   // 武器库
   const own = ownedList(), canMerge = own.some(o => o.tier < TIERS.length - 1 && o.n >= MERGE_NEED[o.tier]);
