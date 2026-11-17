@@ -1391,6 +1391,7 @@ function openShop() {
   if (G.pendingUnlock) {
     const uid = G.pendingUnlock;
     G.pendingUnlock = null;
+    shopTab = 'item'; renderShop();
     saveRun();
     showUnlock(uid);
   }
@@ -1796,6 +1797,7 @@ function card({ icon, name, py, desc, lv, btns, equipped, locked }) {
     <div class="ds">${desc}</div><div class="lv">${lv}</div><div class="row">${btns}</div></div>`;
 }
 const btn = (action, id, label, enabled = true) => `<button data-action="${action}" data-id="${id}" ${enabled ? '' : 'disabled'}>${label}</button>`;
+let shopTab = 'weapon';   // 商店当前分页：life 生命 / weapon 武器 / item 道具
 function renderShop() {
   const fish = G.fish;
   const starRow = n => [0, 1, 2].map(i => `<span class="${i < n ? '' : 'off'}">★</span>`).join('');
@@ -1805,6 +1807,11 @@ function renderShop() {
     <div style="font-size:13px;margin:2px 0 8px">过关奖励 +${G.lastBonus}${G.lastStarBonus ? `, 星级奖励 +${G.lastStarBonus}` : ''} 🐟 · 累计 ★ ${totalStars} · 下一关开始猫咪生命自动回满 (${catMaxHp()} HP)</div>
     <div class="minicard"><div class="txt"><b>汉字小游戏 · 综合练习</b><br>${MINI_TOTAL} 道题，识字、偏旁、词语、成语、读音、古诗各一题，每答对一题 +${miniReward()} 🐟，全对再 +${MINI_PERFECT} 🐟。</div>${btn('mini', '', G.miniPlayed ? '已玩过' : '开始', !G.miniPlayed)}</div>`;
 
+  // 分页：生命 / 武器 / 道具
+  const tabs = [['life', '❤️ 生命'], ['weapon', '🔫 武器'], ['item', '🎒 道具']];
+  h += `<div class="shoptabs">${tabs.map(([id, label]) => `<button class="stab${shopTab === id ? ' on' : ''}" data-action="shopTab" data-id="${id}">${label}</button>`).join('')}</div>`;
+
+  if (shopTab === 'weapon') {
   // 武器库
   const own = ownedList(), canMerge = own.some(o => o.tier < TIERS.length - 1 && o.n >= MERGE_NEED[o.tier]);
   h += `<h3>武器库</h3><div class="wtools"><span>相同的武器 ${MERGE_NEED[0]} 把合成 1 把更高一阶（A 级起需要 ${MERGE_NEED[3]} 把）</span><button data-action="mergeAll" ${canMerge ? '' : 'disabled'}>一键合成</button></div><div class="wgrid">`;
@@ -1824,9 +1831,12 @@ function renderShop() {
       lv: `D 级 伤害 ${Math.round(s.dmg)}${s.count > 1 ? '×' + s.count : ''} ${s.area}${have ? ` · 已有 ${have} 把` : ''}`,
       btns: btn('buyW', w.id, `购买 ${w.cost} 🐟`, fish >= w.cost) });
   }
+  h += '</div>';
+  }
 
+  if (shopTab === 'item') {
   // 道具区：开局只有猫薄荷；每打败一个头目按顺序解锁下一个道具
-  h += `</div><h3>道具（已解锁 ${G.unlockedItems}/${ITEMS.length} · 每击败 1 个头目解锁 1 个）</h3><div class="cards">`;
+  h += `<h3>道具（已解锁 ${G.unlockedItems}/${ITEMS.length} · 每击败 1 个头目解锁 1 个）</h3><div class="cards">`;
   const unlockedList = ITEMS.slice(0, G.unlockedItems);
   for (const it of unlockedList) {
     const st = G.items[it.id], upC = itemUpCost(it, st.lv);
@@ -1854,8 +1864,11 @@ function renderShop() {
       locked: true,
     });
   }
+  h += '</div>';
+  }
 
-  h += '</div><h3>生命升级与加固猫窝</h3><div class="cards">';
+  if (shopTab === 'life') {
+  h += '<h3>生命升级与加固猫窝</h3><div class="cards">';
   for (const s of STATS) {
     const lv = G.stats[s.id], c = statCost(lv);
     const btns = lv < s.max ? btn('stat', s.id, `强化 ${c} 🐟`, fish >= c) : btn('', '', '已满级', false);
@@ -1866,8 +1879,10 @@ function renderShop() {
   h += card({ icon: 'repair', name: '修补猫窝', py: 'xiūbǔ māowō', desc: `恢复猫窝 ${REPAIR_HP} 点生命。`,
     lv: `猫窝生命 ${Math.ceil(G.nestHp)}/${nestMaxHp()}`,
     btns: btn('repair', '', hurt ? `修补 ${REPAIR_COST} 🐟` : '不需要修补', hurt && fish >= REPAIR_COST) });
+  h += '</div>';
+  }
   const nextBoss = isBossLevel(G.level + 1);
-  h += `</div><div class="shopfoot"><button class="big" data-action="next">开始第 ${G.level + 1} 关${nextBoss ? '（头目关！）' : ''}</button><br>
+  h += `<div class="shopfoot"><button class="big" data-action="next">开始第 ${G.level + 1} 关${nextBoss ? '（头目关！）' : ''}</button><br>
     <button class="plain" data-action="toMenu">回到主菜单（进度已自动保存）</button></div>`;
   const body = $('shopBody'), st = body.scrollTop;
   body.innerHTML = h;
@@ -1999,6 +2014,7 @@ document.addEventListener('click', e => {
     case 'miniNext': nextMini(); break;
     case 'miniDone': setState('shop'); renderShop(); show('shop'); break;
     case 'next': G.level++; startLevel(); break;
+    case 'shopTab': shopTab = id; sfx.switch(); renderShop(); break;
     case 'buyW': case 'eqW': case 'mergeW': case 'mergeAll': case 'buyI': case 'upI': case 'stat': case 'repair': shopAction(a, id); break;
   }
 });

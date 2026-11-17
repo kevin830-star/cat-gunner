@@ -208,3 +208,9 @@ body.touch .opt .knum { display: none; }
 .ib .num:empty { display: none; }
 
 .ib.cooling { opacity: .55; }
+
+/* 商店分页 */
+.shoptabs { position: sticky; top: -20px; z-index: 2; display: flex; gap: 8px; margin: 14px -4px 4px; padding: 8px 4px 6px; background: #fff6df; border-bottom: 3px solid #4a3423; }
+.stab { flex: 1; padding: 10px 6px; font-size: 17px; font-weight: 800; cursor: pointer; background: #fbe6bd; border: 3px solid #4a3423; border-radius: 14px; box-shadow: 0 3px 0 #4a3423; }
+.stab.on { background: #ffb347; transform: translateY(2px); box-shadow: 0 1px 0 #4a3423; }
+@media (max-width: 480px) { .shoptabs { top: -16px; } .stab { font-size: 15px; padding: 9px 4px; } }
