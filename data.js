@@ -49,14 +49,31 @@ const STATS = [
 ];
 
 // w: 出现权重；from: 第几关开始出现；group: 一次出现几只
+// target：'nest' 攻击猫窝，'cat' 追着猫打；w：出现权重；from：第几关开始出现；group：一次出现几只
+// weak：弱小的敌人，关卡越高出现得越少；tip：第一次遇到时显示的说明
 const ENEMIES = {
-  mouse:   { name: '老鼠小兵', hp: 22, spd: 68, r: 13, dmg: 3, fish: [1, 2], target: 'nest', from: 1, w: 10 },
-  roach:   { name: '飞奔蟑螂', hp: 9, spd: 135, r: 9, dmg: 4, fish: [1, 1], target: 'cat', from: 2, w: 4, group: 3 },
-  raccoon: { name: '浣熊盗贼', hp: 70, spd: 44, r: 19, dmg: 8, fish: [4, 6], target: 'nest', from: 3, w: 2 },
-  crow:    { name: '乌鸦投弹手', hp: 32, spd: 85, r: 14, dmg: 8, fish: [3, 4], target: 'cat', ranged: true, from: 4, w: 3 },
+  mouse:   { name: '老鼠小兵', py: 'lǎoshǔ xiǎobīng', tip: '最常见的小敌人，冲向猫窝', hp: 22, spd: 68, r: 13, dmg: 3, fish: [1, 2], target: 'nest', from: 1, w: 10, weak: true },
+  roach:   { name: '飞奔蟑螂', py: 'fēibēn zhāngláng', tip: '成群结队，追着猫咬', hp: 9, spd: 135, r: 9, dmg: 4, fish: [1, 1], target: 'cat', from: 2, w: 4, group: 3, weak: true },
+  raccoon: { name: '浣熊盗贼', py: 'huānxióng dàozéi', tip: '皮厚，专偷猫窝', hp: 70, spd: 44, r: 19, dmg: 8, fish: [4, 6], target: 'nest', from: 3, w: 2 },
+  crow:    { name: '乌鸦投弹手', py: 'wūyā tóudànshǒu', tip: '在空中朝猫丢炸弹', hp: 32, spd: 85, r: 14, dmg: 8, fish: [3, 4], target: 'cat', ranged: true, pdmg: 0.7, from: 4, w: 3 },
+  boar:    { name: '冲撞野猪', py: 'chōngzhuàng yězhū', tip: '蓄力后直线冲向猫，快躲开', hp: 80, spd: 58, r: 20, dmg: 9, fish: [5, 7], target: 'cat', charger: true, from: 7, w: 3 },
+  bat:     { name: '吸血蝙蝠', py: 'xīxuè biānfú', tip: '又快又乱的飞行敌人，专追猫', hp: 16, spd: 150, r: 10, dmg: 3, fish: [2, 3], target: 'cat', flyer: true, from: 8, w: 3, group: 2, weak: true },
+  bomber:  { name: '自爆老鼠', py: 'zìbào lǎoshǔ', tip: '冲上来就爆炸，别让它靠近', hp: 34, spd: 100, r: 13, dmg: 10, fish: [3, 4], target: 'near', bomber: true, from: 10, w: 3 },
+  snake:   { name: '毒蛇', py: 'dúshé', tip: '远远地吐出三发毒液', hp: 40, spd: 62, r: 14, dmg: 8, fish: [4, 5], target: 'cat', ranged: true, shots: 3, pdmg: 0.5, pcol: '#7ed957', rcd: 2.8, pspd: 190, from: 12, w: 3 },
+  bear:    { name: '黑熊', py: 'hēixióng', tip: '皮糙肉厚，一掌拍坏猫窝', hp: 250, spd: 40, r: 26, dmg: 18, fish: [9, 12], target: 'nest', from: 14, w: 2 },
+  healer:  { name: '医疗兔', py: 'yīliáo tù', tip: '给周围的敌人回血，先打它', hp: 60, spd: 52, r: 13, dmg: 3, fish: [5, 6], target: 'nest', healer: true, from: 15, w: 2 },
+  slime:   { name: '软泥怪', py: 'ruǎnní guài', tip: '被打败后会分裂成两只小的', hp: 90, spd: 54, r: 17, dmg: 8, fish: [4, 6], target: 'nest', splits: true, from: 17, w: 3 },
   elite:   { name: '铁桶鼠队长', hp: 180, spd: 50, r: 24, dmg: 9, fish: [14, 18], target: 'nest' },
   boss:    { name: '头目', hp: 520, spd: 34, r: 40, dmg: 14, fish: [40, 50], target: 'nest' },
 };
+
+// 敌人的强度分级：颜色越深、个头越大、越难打。size/hp/dmg/spd/fish 都是倍数
+const ETIERS = [
+  { name: '普通', size: 1, hp: 1, dmg: 1, spd: 1, fish: 1, tint: null, alpha: 0, bar: '#ff7a5c' },
+  { name: '强化', size: 1.25, hp: 1.5, dmg: 1.2, spd: 1, fish: 1.8, tint: '#3d8bff', alpha: 0.34, bar: '#4f9dff' },
+  { name: '精英', size: 1.5, hp: 2.4, dmg: 1.45, spd: 0.95, fish: 3, tint: '#a45cf0', alpha: 0.4, bar: '#b57cf5' },
+  { name: '狂暴', size: 1.8, hp: 3.8, dmg: 1.75, spd: 0.9, fish: 5, tint: '#ff3b2f', alpha: 0.46, bar: '#ff5a4a' },
+];
 
 // 战斗中随机掉落的增益。ch: 掉落物上显示的汉字；dur: 持续秒数（0 = 立刻生效）
 const BUFFS = [

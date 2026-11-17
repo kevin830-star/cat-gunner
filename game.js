@@ -17,7 +17,8 @@ const shuffle = arr => {
 // 抽题袋：抽完一轮才会重复
 const makeBag = list => { let bag = []; return () => { if (!bag.length) bag = shuffle(list); return bag.pop(); }; };
 
-const canvas = $('game'), ctx = canvas.getContext('2d');
+const canvas = $('game');
+let ctx = canvas.getContext('2d');
 const WORLD = { w: 1700, h: 1300 };
 const NEST = { x: WORLD.w / 2, y: WORLD.h / 2, r: 46 };
 const FENCE_R = 150;
@@ -213,7 +214,7 @@ const freshRun = () => {
     inv, eq: { id: 'pistol', tier: 0 },
     items: Object.fromEntries(ITEMS.map(it => [it.id, { uses: 0, lv: 1 }])),
     stats: { catHp: 0, catSpd: 0, nestHp: 0 },
-    nestHp: 300, miniPlayed: false, lastBonus: 0, stars: {}, lastStars: 0, lastStarBonus: 0, lastCatLoss: 0, lastNestLoss: 0,
+    nestHp: 300, miniPlayed: false, lastBonus: 0, seen: {}, stars: {}, lastStars: 0, lastStarBonus: 0, lastCatLoss: 0, lastNestLoss: 0,
   };
 };
 
@@ -246,6 +247,7 @@ function loadRun() {
       else if (v && typeof v === 'object') run.items[it.id] = { uses: clamp(Math.floor(v.uses) || 0, 0, ITEM_CAP), lv: clamp(Math.floor(v.lv) || 1, 1, it.max) };
     }
     for (const st of STATS) if (d.stats && d.stats[st.id] >= 0) run.stats[st.id] = clamp(Math.floor(d.stats[st.id]), 0, st.max);
+    if (d.seen && typeof d.seen === 'object') for (const k in d.seen) if (d.seen[k]) run.seen[k] = 1;
     if (d.stars && typeof d.stars === 'object') for (const k in d.stars) if (d.stars[k] >= 1 && d.stars[k] <= 3) run.stars[k] = d.stars[k] | 0;
     return run;
   } catch (e) { return null; }
@@ -269,8 +271,14 @@ function continueGame() {
 // 小头目出现的时间（秒）：第 2 关起每关都有，越往后越多
 function eliteSchedule(lv) {
   if (lv < 2) return [];
-  if (isBossLevel(lv)) return lv >= 9 ? [35] : [];
-  return lv >= 8 ? [15, 30, 45] : lv >= 5 ? [18, 40] : [22];
+  if (isBossLevel(lv)) return lv >= 18 ? [22, 44] : lv >= 9 ? [35] : [];
+  return lv >= 20 ? [8, 18, 28, 38, 48] : lv >= 14 ? [12, 24, 36, 48] : lv >= 8 ? [15, 30, 45] : lv >= 5 ? [18, 40] : [22];
+}
+// 敌人潮：第 8 关起，关卡中途会有一大群敌人从同一个方向涌来
+function hordeSchedule(lv) {
+  if (lv < 8) return [];
+  if (isBossLevel(lv)) return [38];
+  return lv >= 16 ? [14, 30, 46] : lv >= 12 ? [20, 40] : [28];
 }
 
 function startLevel() {
@@ -283,7 +291,7 @@ function startLevel() {
     shake: 0, banner: 2.2, nestFlash: 0,
     drops: [], buffT: Object.fromEntries(BUFFS.filter(b => b.dur).map(b => [b.id, 0])),
     rings: [], bolts: [], helpers: [], trail: [], shAngle: 0, stormCd: 2, morphT: 0, stompT: 0, trailT: 0, form: null,
-    eliteTimes: eliteSchedule(G.level), notice: null, clearT: 0, fireworkT: 0,
+    eliteTimes: eliteSchedule(G.level), hordeTimes: hordeSchedule(G.level), notice: null, clearT: 0, fireworkT: 0,
   };
   // 道具：每关开始时消耗 1 次使用次数，用完就不再生效
   for (const it of ITEMS) {
@@ -344,27 +352,56 @@ function burst(x, y, color, n = 6, speed = 120) {
 }
 
 // ---------- 敌人 ----------
-function spawnEnemy(type, pos) {
+// 难度曲线：10 关之后血量增长加快，敌人也更快更疼
+const hpScale = lv => (1 + 0.12 * (lv - 1)) * (1 + 0.04 * Math.max(0, lv - 8));
+const dmgScale = lv => (1 + 0.08 * (lv - 1)) * (1 + 0.025 * Math.max(0, lv - 8));
+const speedScale = lv => Math.min(1.7, 1 + 0.03 * (lv - 1));
+const ENEMY_CAP = 110;
+// 敌人强度：关卡越高，强化（蓝）、精英（紫）、狂暴（红）的敌人越多
+function rollTier(lv) {
+  const p1 = clamp((lv - 4) * 0.035, 0, 0.3), p2 = clamp((lv - 9) * 0.025, 0, 0.22), p3 = clamp((lv - 14) * 0.018, 0, 0.15);
+  const r = Math.random();
+  const t = r < p3 ? 3 : r < p3 + p2 ? 2 : r < p3 + p2 + p1 ? 1 : 0;
+  return L && L.boss ? Math.min(t, 1) : t;   // 头目在场时不出现紫色、红色的高档敌人，让头目战保持清晰
+}
+// 一部分原本打猫窝的敌人会改去追猫；关卡越高、强度越高，追猫的越多
+const huntChance = (lv, tier) => lv >= 8 ? clamp(0.02 * (lv - 7) + 0.08 * tier, 0, 0.4) : 0;
+const edgePos = (side, along) => side === 0 ? { x: along, y: -20 } : side === 1 ? { x: along, y: WORLD.h + 20 } : side === 2 ? { x: -20, y: along } : { x: WORLD.w + 20, y: along };
+
+function spawnEnemy(type, pos, tierArg) {
   const d = ENEMIES[type];
   const lv = G.level;
   let x, y;
   if (pos) { x = pos.x; y = pos.y; } else {
-    const side = randInt(0, 3);
-    if (side === 0) { x = rand(0, WORLD.w); y = -20; }
-    else if (side === 1) { x = rand(0, WORLD.w); y = WORLD.h + 20; }
-    else if (side === 2) { x = -20; y = rand(0, WORLD.h); }
-    else { x = WORLD.w + 20; y = rand(0, WORLD.h); }
+    const side = randInt(0, 3), p = edgePos(side, side < 2 ? rand(0, WORLD.w) : rand(0, WORLD.h));
+    x = p.x; y = p.y;
   }
-  let hp = d.hp * (1 + 0.12 * (lv - 1));
+  const special = type === 'boss' || type === 'elite';
+  const tier = special ? 0 : tierArg !== undefined ? tierArg : rollTier(lv), T = ETIERS[tier];
+  let hp = d.hp * hpScale(lv) * T.hp;
   const kind = type === 'boss' ? bossFor(lv) : null;
   if (kind) hp = d.hp * kind.hp * (1 + 0.7 * (lv / BOSS_EVERY - 1)) * BOSS_HP_MULT;
   const e = {
-    type, x, y, r: d.r, hp, maxHp: hp, spd: d.spd * Math.min(1.5, 1 + 0.025 * (lv - 1)) * rand(0.92, 1.08),
-    dmg: d.dmg * (1 + 0.08 * (lv - 1)), cd: rand(0.3, 1), cd2: 0, flash: 0, face: 1, t: rand(0, 10), summon: 4, dead: false,
+    type, tier, x, y, r: d.r * T.size, hp, maxHp: hp, spd: d.spd * speedScale(lv) * T.spd * rand(0.92, 1.08),
+    dmg: d.dmg * (special ? 1 + 0.08 * (lv - 1) : dmgScale(lv)) * T.dmg, cd: rand(0.3, 1), cd2: 0, flash: 0, face: 1, t: rand(0, 10), seed: rand(0, 6.28), summon: 4, dead: false,
+    hunter: d.target === 'cat' || (d.target === 'nest' && !special && Math.random() < huntChance(lv, tier)),
   };
   if (kind) Object.assign(e, { kind, r: kind.r, spd: kind.spd, st: 'walk', stT: 0, stDur: 1, spCd: 3, atkAnim: 0, z: 0, dir: 0, walking: true, meteors: [], sub: '', atk: 0, tick: 0 });
   L.enemies.push(e);
+  if (!special) announceEnemy(type, tier);
   return e;
+}
+// 第一次遇到新敌人，或第一次遇到更强的敌人时，在屏幕上提示一下
+function announceEnemy(type, tier) {
+  if (L.notice) return;
+  const d = ENEMIES[type];
+  if (!G.seen[type] && d.tip) {
+    G.seen[type] = 1;
+    L.notice = { text: `新敌人：${d.name}${store.pinyin && d.py ? '（' + d.py + '）' : ''}　${d.tip}`, t: 4.2, color: '#ffe066' };
+  } else if (tier > 0 && !G.seen.tiers) {
+    G.seen.tiers = 1;
+    L.notice = { text: '个头越大、颜色越深越强：蓝·强化 → 紫·精英 → 红·狂暴', t: 4.2, color: '#ffe066' };
+  }
 }
 
 // ---------- 头目行为 ----------
@@ -527,6 +564,60 @@ function updateDragon(e, dt, c) {
   }
 }
 
+// 野猪：先蓄力（地上出现红色预警），再沿直线冲撞
+function updateCharger(e, dt, c) {
+  const dCat = dist(e, c);
+  e.mode = e.mode || 'run';
+  if (e.mode === 'run') {
+    const dx = c.x - e.x, dy = c.y - e.y, dd = Math.hypot(dx, dy) || 1;
+    let spd = e.spd * (e.rage > 0 ? 1.4 : 1);
+    if (ilv('fence') && dist(e, NEST) < FENCE_R) spd *= 1 - fenceSlow();
+    if (dd > c.r + e.r - 8) { e.x += dx / dd * spd * dt; e.y += dy / dd * spd * dt; }
+    if (Math.abs(dx) > 2) e.face = dx < 0 ? -1 : 1;
+    if (e.cd2 <= 0 && dCat < c.r + e.r - 4) { e.cd2 = 0.8; hurtCat(e.dmg); }
+    if (e.cd <= 0 && dCat < 380 && dCat > 90) { e.mode = 'wind'; e.mt = 0.7; e.dir = Math.atan2(dy, dx); sfx.boarWind(); }
+  } else if (e.mode === 'wind') {
+    e.mt -= dt;
+    if (e.mt > 0.25) e.dir = Math.atan2(c.y - e.y, c.x - e.x);   // 最后 0.25 秒锁定方向
+    e.face = Math.cos(e.dir) < 0 ? -1 : 1;
+    if (e.mt <= 0) { e.mode = 'charge'; e.mt = 0.9; e.hit = false; sfx.dash(); }
+  } else if (e.mode === 'charge') {
+    e.mt -= dt;
+    const v = 430 * Math.min(1.3, 1 + 0.01 * G.level);
+    e.x += Math.cos(e.dir) * v * dt; e.y += Math.sin(e.dir) * v * dt;
+    if (Math.random() < 0.7) L.parts.push({ x: e.x - Math.cos(e.dir) * e.r, y: e.y + e.r * 0.7, vx: rand(-40, 40), vy: rand(-40, 0), life: 0.4, color: '#e3cf9a', r: rand(3, 6) });
+    if (!e.hit && dCat < c.r + e.r) { e.hit = true; hurtCat(e.dmg * 1.2); knockCat(e, 380); }
+    if (dist(e, NEST) < NEST.r + e.r) { hurtNest(e.dmg * 1.2); e.mt = 0; L.shake = Math.max(L.shake, 0.2); }
+    if (e.x < 20 || e.x > WORLD.w - 20 || e.y < 20 || e.y > WORLD.h - 20) { e.x = clamp(e.x, 20, WORLD.w - 20); e.y = clamp(e.y, 20, WORLD.h - 20); e.mt = 0; }
+    if (e.mt <= 0) { e.mode = 'rest'; e.mt = 0.8; }
+  } else {
+    e.mt -= dt;
+    if (e.mt <= 0) { e.mode = 'run'; e.cd = rand(2, 3.4); }
+  }
+}
+// 医疗兔：定时给周围受伤的敌人回血
+function healTick(e, dt) {
+  e.hc = (e.hc === undefined ? 1 : e.hc) - dt;
+  if (e.hc > 0) return;
+  e.hc = 1.6;
+  let n = 0;
+  for (const o of L.enemies) {
+    if (o === e || o.dead || o.type === 'boss' || o.hp >= o.maxHp || dist(o, e) > 150) continue;
+    o.hp = Math.min(o.maxHp, o.hp + o.maxHp * 0.08); n++;
+    addText(o.x, o.y - o.r - 8, '+', '#7ed957', 15, 0.7);
+  }
+  if (n) { ring(e.x, e.y, 150, '#7ed957', 0.5, true); sfx.heal(); }
+}
+// 自爆老鼠：碰到目标就爆炸，波及范围内的猫和猫窝
+function bomberBlast(e, c) {
+  const R = 80 + 8 * e.tier;
+  ring(e.x, e.y, R, '#ff6b3c', 0.45, true); ring(e.x, e.y, R * 0.55, '#fff7b0', 0.3);
+  burst(e.x, e.y, '#ff9a3c', 16, 240); burst(e.x, e.y, '#4a3423', 6, 160);
+  L.shake = Math.max(L.shake, 0.25); sfx.bomberBlast();
+  if (dist(c, e) < R + c.r) { hurtCat(e.dmg * 1.4); knockCat(e, 360); }
+  if (dist(NEST, e) < R + NEST.r) hurtNest(e.dmg * 1.4);
+}
+
 function bossAct(e, c) {
   const sp = e.kind.special, lv = G.level, around = () => ({ x: e.x + rand(-70, 70), y: e.y + rand(-70, 70) });
   e.hitOnce = false; e.nestOnce = false;
@@ -562,15 +653,31 @@ function bossAct(e, c) {
     bossState(e, 'rest', 0.5);
   } else if (sp === 'charge') { sfx.dash(); bossState(e, 'act', 1.1); }
 }
-function spawnWave() {
-  const lv = G.level;
+// 按关卡和权重挑一种敌人；弱小的敌人随着关卡升高越来越少
+function pickType(lv) {
   const pool = Object.keys(ENEMIES).filter(k => ENEMIES[k].w && ENEMIES[k].from <= lv);
-  let total = 0; for (const k of pool) total += ENEMIES[k].w;
-  let r = Math.random() * total, type = pool[0];
-  for (const k of pool) { r -= ENEMIES[k].w; if (r <= 0) { type = k; break; } }
-  const n = ENEMIES[type].group || 1;
-  const first = spawnEnemy(type);
-  for (let i = 1; i < n; i++) spawnEnemy(type, { x: first.x + rand(-30, 30), y: first.y + rand(-30, 30) });
+  const wt = k => ENEMIES[k].w * (ENEMIES[k].weak ? Math.max(0.2, 1 - 0.06 * Math.max(0, lv - 6)) : 1);
+  let total = 0; for (const k of pool) total += wt(k);
+  let r = Math.random() * total;
+  for (const k of pool) { r -= wt(k); if (r <= 0) return k; }
+  return pool[0];
+}
+function spawnWave() {
+  if (L.enemies.length >= ENEMY_CAP) return;
+  const type = pickType(G.level), n = ENEMIES[type].group || 1, tier = rollTier(G.level);
+  const first = spawnEnemy(type, undefined, tier);
+  for (let i = 1; i < n; i++) spawnEnemy(type, { x: first.x + rand(-30, 30), y: first.y + rand(-30, 30) }, tier);
+}
+// 敌人潮：一大群敌人从同一个方向涌来
+function hordeBurst() {
+  const lv = G.level, side = randInt(0, 3), n = Math.min(Math.floor((6 + lv * 0.7) * (L.boss ? 0.6 : 1)), Math.max(0, ENEMY_CAP - L.enemies.length));
+  const mid = side < 2 ? rand(300, WORLD.w - 300) : rand(250, WORLD.h - 250);
+  for (let i = 0; i < n; i++) {
+    const p = edgePos(side, mid + rand(-170, 170)), out = rand(0, 90);
+    spawnEnemy(pickType(lv), { x: p.x + (side === 2 ? -out : side === 3 ? out : 0), y: p.y + (side === 0 ? -out : side === 1 ? out : 0) });
+  }
+  L.notice = { text: `敌人潮来了！从${['上方', '下方', '左边', '右边'][side]}涌来`, t: 3, color: '#ff9a8a' };
+  sfx.horde();
 }
 function damageEnemy(e, dmg) {
   if (e.dead) return;
@@ -580,7 +687,9 @@ function damageEnemy(e, dmg) {
     e.dead = true; G.kills++;
     const d = ENEMIES[e.type];
     burst(e.x, e.y, '#fff', e.type === 'boss' ? 30 : 8, e.type === 'boss' ? 260 : 130);
-    const n = randInt(d.fish[0], d.fish[1]);
+    const T = ETIERS[e.tier || 0];
+    let n = Math.round(randInt(d.fish[0], d.fish[1]) * T.fish);
+    if (e.small) n = Math.max(1, Math.round(n * 0.3));
     if (e.type === 'boss') {
       for (let i = 0; i < 10; i++) L.fish.push({ x: e.x + rand(-40, 40), y: e.y + rand(-40, 40), v: Math.ceil(n / 10) });
       dropBuff(e.x - 30, e.y); dropBuff(e.x + 30, e.y);
@@ -592,15 +701,28 @@ function damageEnemy(e, dmg) {
       L.shake = 0.3; sfx.boom();
     } else {
       L.fish.push({ x: e.x, y: e.y, v: n });
-      if (Math.random() < BUFF_DROP_CHANCE) dropBuff(e.x, e.y);
+      // 越强的敌人越容易掉增益
+      if (Math.random() < BUFF_DROP_CHANCE + [0, 0.03, 0.14, 0.5][e.tier || 0]) dropBuff(e.x, e.y);
+      if (d.splits && !e.small) splitSlime(e);
+      if (e.tier >= 2) { burst(e.x, e.y, T.tint, 12, 200); L.shake = Math.max(L.shake, 0.12); }
       sfx.kill();
     }
   }
 }
+// 软泥怪被打败后分裂成两只小的
+function splitSlime(e) {
+  for (let i = 0; i < 2; i++) {
+    const s = spawnEnemy('slime', { x: e.x + rand(-16, 16), y: e.y + rand(-16, 16) }, e.tier);
+    s.small = true; s.r = e.r * 0.62; s.hp = s.maxHp = e.maxHp * 0.4; s.spd *= 1.25; s.hunter = e.hunter; s.dmg = e.dmg * 0.7;
+  }
+  burst(e.x, e.y, '#4fd6a8', 10, 150); sfx.slimeSplit();
+}
 // ---------- 增益掉落 ----------
 function dropBuff(x, y) {
   if (L.drops.length >= 6) return;
-  const b = BUFFS[randInt(0, BUFFS.length - 1)];
+  // 保底：猫的血量低于三分之一时，下一个增益一定是爱心
+  const low = L.cat.hp < catMaxHp() / 3 && !L.drops.some(d => d.buff.id === 'heal');
+  const b = low ? BUFFS.find(x => x.id === 'heal') : BUFFS[randInt(0, BUFFS.length - 1)];
   L.drops.push({ x: clamp(x, 30, WORLD.w - 30), y: clamp(y, 30, WORLD.h - 30), buff: b, life: 12, t: rand(0, 6) });
 }
 function applyBuff(b) {
@@ -624,6 +746,7 @@ function applyBuff(b) {
 function hurtCat(dmg) {
   const c = L.cat;
   if (c.inv > 0 || L.buffT.shield > 0 || L.buffT.giant > 0) return;
+  dmg = Math.min(dmg, catMaxHp() * 0.25);   // 单次受伤不超过最大生命的 25%，再强的敌人也不会一下把猫打死
   c.hp -= dmg; L.catLost += dmg; c.inv = 0.45; L.shake = Math.max(L.shake, 0.2);
   addText(c.x, c.y - 30, '-' + Math.round(dmg), '#ff6b5e', 16);
   sfx.hurt();
@@ -835,9 +958,10 @@ function update(dt) {
   if (L.time > 0) {
     L.spawnT -= dt;
     if (L.spawnT <= 0) {
-      spawnWave();
-      const base = Math.max(0.3, 1.7 * Math.pow(0.92, G.level - 1));
-      L.spawnT = base * (1 - 0.3 * L.elapsed / LEVEL_TIME) * rand(0.8, 1.2) * (L.boss ? 1.5 : 1);
+      const per = 1 + Math.floor(Math.max(0, G.level - 19) / 8);   // 很高的关卡每次刷出多只
+      for (let i = 0; i < per; i++) spawnWave();
+      const base = Math.max(0.45, 1.7 * Math.pow(0.92, G.level - 1));
+      L.spawnT = base * (1 - 0.3 * L.elapsed / LEVEL_TIME) * rand(0.8, 1.2) * (L.boss ? 1.8 : 1);
     }
   }
   if (L.isBoss && !L.bossSpawned && L.elapsed > 6) {
@@ -854,6 +978,9 @@ function update(dt) {
     openQuiz(`${L.boss.kind.name}发怒了！`);
     return;
   }
+
+  // 敌人潮
+  while (L.hordeTimes.length && L.elapsed >= L.hordeTimes[0]) { L.hordeTimes.shift(); hordeBurst(); }
 
   // 小头目
   while (L.eliteTimes.length && L.elapsed >= L.eliteTimes[0]) {
@@ -872,7 +999,10 @@ function update(dt) {
     e.cd -= dt; e.cd2 -= dt; e.t += dt;
     if (e.rage > 0) e.rage -= dt;
     if (e.type === 'boss') { updateBoss(e, dt, c); continue; }
-    const tgt = d.target === 'nest' ? NEST : c;
+    if (d.charger) { updateCharger(e, dt, c); continue; }
+    if (d.healer) healTick(e, dt);
+    if (d.bomber) e.hunter = dist(e, c) < 340;   // 自爆老鼠：猫在附近就扑向猫，否则冲向猫窝
+    const tgt = e.hunter ? c : NEST;
     let spd = e.spd * (e.rage > 0 ? 1.4 : 1);
     if (e.type === 'elite' && e.t % 4 > 3) {   // 小头目每隔几秒冲刺一下
       spd *= 2.6;
@@ -881,16 +1011,27 @@ function update(dt) {
     if (ilv('fence') && dist(e, NEST) < FENCE_R) spd *= 1 - fenceSlow();
     const dx = tgt.x - e.x, dy = tgt.y - e.y, dd = Math.hypot(dx, dy) || 1;
     const stop = d.ranged ? 230 : (tgt === NEST ? NEST.r + e.r - 4 : c.r + e.r - 8);
-    if (dd > stop) {
+    if (d.flyer) {   // 蝙蝠：绕着弯子飞向猫
+      const a = Math.atan2(dy, dx) + Math.sin(e.t * 4 + e.seed) * (dd > 120 ? 0.9 : 0.3);
+      e.x += Math.cos(a) * spd * dt; e.y += Math.sin(a) * spd * dt;
+      if (Math.abs(Math.cos(a)) > 0.1) e.face = Math.cos(a) < 0 ? -1 : 1;
+    } else if (dd > stop) {
       e.x += dx / dd * spd * dt; e.y += dy / dd * spd * dt;
       if (Math.abs(dx) > 2) e.face = dx < 0 ? -1 : 1;
     } else if (tgt === NEST && e.cd <= 0) {
       e.cd = 1; hurtNest(e.dmg);
     }
+    if (d.ranged && dd < 150) { e.x -= dx / dd * spd * 0.7 * dt; e.y -= dy / dd * spd * 0.7 * dt; }   // 远程敌人会和猫拉开距离
     if (d.ranged && dd < 300 && e.cd <= 0) {
-      e.cd = 2.2;
-      L.ebullets.push({ x: e.x, y: e.y, vx: dx / dd * 210, vy: dy / dd * 210, dmg: e.dmg, life: 2.2, r: 6 });
+      e.cd = d.rcd || 2.2;
+      const n = d.shots || 1, base = Math.atan2(dy, dx), pspd = d.pspd || 210;
+      for (let i = 0; i < n; i++) {
+        const a = base + (n > 1 ? (i - (n - 1) / 2) * 0.28 : 0);
+        L.ebullets.push({ x: e.x, y: e.y, vx: Math.cos(a) * pspd, vy: Math.sin(a) * pspd, dmg: e.dmg * (d.pdmg || 0.7), life: 2.4, r: 6, col: d.pcol });
+      }
+      if (d.shots) sfx.spit();
     }
+    if (d.bomber && dd < (tgt === NEST ? NEST.r : c.r) + e.r) { bomberBlast(e, c); e.dead = true; continue; }
     if (!d.ranged && e.cd2 <= 0 && dist(e, c) < c.r + e.r - 4) { e.cd2 = 0.8; hurtCat(e.dmg); }
   }
   updateGadgets(dt);
@@ -1624,10 +1765,54 @@ function drawBossBody(e, fl) {
   BOSS_ART.draw(ctx, e.kind.id, pose);
 }
 
-function drawEnemy(e) {
+function polyFill(pts, fill, stroke = true) {
+  ctx.beginPath(); ctx.moveTo(pts[0], pts[1]);
+  for (let i = 2; i < pts.length; i += 2) ctx.lineTo(pts[i], pts[i + 1]);
+  ctx.closePath(); ctx.fillStyle = fill; ctx.fill(); if (stroke) ctx.stroke();
+}
+function ellRot(x, y, rx, ry, rot, fill, stroke) {
+  ctx.beginPath(); ctx.ellipse(x, y, rx, ry, rot, 0, TAU);
+  if (fill) { ctx.fillStyle = fill; ctx.fill(); }
+  if (stroke) { ctx.strokeStyle = stroke; ctx.stroke(); }
+}
+
+// 强化过的敌人：画的时候把每个颜色混入强度色（蓝/紫/红）。
+// 用代理拦截 fillStyle / strokeStyle，这样不用改每一种敌人的画法，也不用额外的离屏画布
+const ctxReal = ctx;
+let tintRgb = null, tintAmt = 0;
+const tintCache = new Map();
+function tintColor(col) {
+  if (typeof col !== 'string' || col[0] !== '#' || col === '#fff' || col === '#ffffff') return col;   // 纯白（受击闪白、眼白）保持不变
+  const key = col + tintRgb;
+  let out = tintCache.get(key);
+  if (out) return out;
+  let h = col.slice(1); if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+  const v = [0, 2, 4].map((i, k) => Math.round(parseInt(h.slice(i, i + 2), 16) * (1 - tintAmt) + tintRgb[k] * tintAmt));
+  out = '#' + v.map(x => x.toString(16).padStart(2, '0')).join('');
+  tintCache.set(key, out);
+  return out;
+}
+const boundFns = new Map();
+const ctxTinted = new Proxy(ctxReal, {
+  get(t, k) {
+    const v = t[k];
+    if (typeof v !== 'function') return v;
+    let f = boundFns.get(k); if (!f) { f = v.bind(t); boundFns.set(k, f); }
+    return f;
+  },
+  set(t, k, v) { t[k] = (k === 'fillStyle' || k === 'strokeStyle') && tintRgb ? tintColor(v) : v; return true; },
+});
+const TINT_RGB = ETIERS.map(T => T.tint && [1, 3, 5].map(i => parseInt(T.tint.slice(i, i + 2), 16)));
+function drawEnemyTinted(e) {
+  tintRgb = TINT_RGB[e.tier]; tintAmt = ETIERS[e.tier].alpha * 1.35;
+  ctx = ctxTinted;
+  try { drawEnemyBody(e); } finally { ctx = ctxReal; tintRgb = null; }
+}
+
+function drawEnemyBody(e) {
   const wob = Math.sin(e.t * 10) * 1.5;
-  ell(e.x, e.y + e.r * 0.9, e.r * 0.9, e.r * 0.3, 'rgba(0,0,0,.18)');
-  ctx.save(); ctx.translate(e.x, e.y + (e.type === 'crow' ? Math.sin(e.t * 5) * 4 - 8 : wob * 0.4)); ctx.scale(e.face, 1);
+  const fly = e.type === 'crow' || e.type === 'bat';
+  ctx.save(); ctx.translate(e.x, e.y + (fly ? Math.sin(e.t * (e.type === 'bat' ? 9 : 5)) * 4 - 8 : wob * 0.4)); ctx.scale(e.face, 1);
   ctx.lineWidth = 2.5; ctx.strokeStyle = OUT; ctx.lineJoin = 'round'; ctx.lineCap = 'round';
   const fl = e.flash > 0;
   const r = e.r;
@@ -1672,6 +1857,84 @@ function drawEnemy(e) {
     ctx.fillStyle = OUT; ctx.beginPath(); ctx.arc(6, -3, 1.4, 0, TAU); ctx.fill();
   } else if (e.type === 'boss') {
     drawBossBody(e, fl);
+  } else if (e.type === 'boar') {
+    const c = fl ? '#fff' : '#8b5a3c', dk = fl ? '#fff' : '#5e3a24', pink = fl ? '#fff' : '#e8a5a0';
+    const run = e.mode === 'charge' ? Math.sin(e.t * 28) * 3 : wob;
+    for (const x of [-0.55, -0.15, 0.3, 0.7]) ell(x * r, r * 0.78 + (x > 0.2 ? run : -run) * 0.5, r * 0.14, r * 0.22, dk, OUT);
+    ctx.beginPath(); ctx.moveTo(-r * 1.05, -r * 0.1); ctx.quadraticCurveTo(-r * 1.45, -r * 0.5, -r * 1.2, -r * 0.75); ctx.lineWidth = 3.5; ctx.stroke(); ctx.lineWidth = 2.5;
+    ell(0, 0, r * 1.1, r * 0.85, c, OUT);
+    for (let i = 0; i < 5; i++) { const x = -r * 0.8 + i * r * 0.4; polyFill([x - 3, -r * 0.72, x + 1, -r * 1.05, x + 5, -r * 0.7], dk); }
+    ell(r * 0.85, r * 0.08, r * 0.5, r * 0.46, c, OUT);
+    ell(r * 1.28, r * 0.2, r * 0.28, r * 0.22, pink, OUT);
+    polyFill([r * 1.05, r * 0.3, r * 1.15, r * 0.66, r * 1.24, r * 0.34], fl ? '#fff' : '#f4efe0');
+    polyFill([r * 0.5, -r * 0.3, r * 0.58, -r * 0.66, r * 0.82, -r * 0.34], dk);
+    const ang = e.mode === 'wind' || e.mode === 'charge';
+    ctx.fillStyle = ang ? '#ff3b2f' : OUT; ctx.beginPath(); ctx.arc(r * 0.88, -r * 0.1, 2.8, 0, TAU); ctx.fill();
+    if (ang) { ctx.beginPath(); ctx.moveTo(r * 0.7, -r * 0.3); ctx.lineTo(r * 1.04, -r * 0.16); ctx.stroke(); }
+  } else if (e.type === 'bat') {
+    const c = fl ? '#fff' : '#4b3f72', wing = fl ? '#fff' : '#6a5a9e', f = Math.sin(e.t * 22);
+    for (const [rot, col] of [[-1.15 + f * 0.7, wing], [-0.55 + f * 0.7, c]]) {
+      ctx.save(); ctx.translate(-r * 0.1, -r * 0.2); ctx.rotate(rot);
+      polyFill([0, 0, -r * 0.3, -r * 1.9, -r * 0.75, -r * 1.35, -r * 1.05, -r * 1.7, -r * 1.3, -r * 0.6, -r * 0.8, -r * 0.2], col);
+      ctx.restore();
+    }
+    ell(0, 0, r * 0.85, r * 0.75, c, OUT);
+    polyFill([r * 0.1, -r * 0.6, r * 0.2, -r * 1.15, r * 0.6, -r * 0.55], c);
+    polyFill([r * 0.5, -r * 0.5, r * 0.8, -r * 1.05, r * 0.9, -r * 0.35], c);
+    ctx.fillStyle = '#ff4040'; ctx.beginPath(); ctx.arc(r * 0.45, -r * 0.1, 2.2, 0, TAU); ctx.fill();
+    ctx.lineWidth = 1.2; polyFill([r * 0.55, r * 0.3, r * 0.65, r * 0.7, r * 0.8, r * 0.3], '#fff'); ctx.lineWidth = 2.5;
+  } else if (e.type === 'bomber') {
+    const c = fl ? '#fff' : '#c9b8a6', near = e.hunter, blink = Math.sin(e.t * (near ? 34 : 16)) > 0;
+    ctx.beginPath(); ctx.moveTo(-r, 4); ctx.quadraticCurveTo(-r - 12, 8 + wob, -r - 16, -2); ctx.strokeStyle = '#e59aa0'; ctx.stroke(); ctx.strokeStyle = OUT;
+    ell(-5, -r + 1, 6, 6, c, OUT); ell(6, -r, 6, 6, c, OUT);
+    ell(0, 0, r, r * 0.85, c, OUT);
+    for (const dx of [-7, -1, 5]) { ctx.fillStyle = fl ? '#fff' : '#d9382c'; ctx.fillRect(-r * 0.55 + dx, -r * 1.25, 5, r * 0.75); ctx.strokeRect(-r * 0.55 + dx, -r * 1.25, 5, r * 0.75); }
+    ctx.fillStyle = OUT; ctx.fillRect(-r * 0.55 - 7, -r * 0.95, 17, 2.5);
+    ctx.beginPath(); ctx.moveTo(-r * 0.3, -r * 1.25); ctx.quadraticCurveTo(-r * 0.2, -r * 1.7, r * 0.1, -r * 1.65); ctx.stroke();
+    ell(r * 0.1, -r * 1.65, blink ? 4 : 2.5, blink ? 4 : 2.5, blink ? '#ffe066' : '#ff8a3c');
+    ctx.fillStyle = '#ff3b2f'; ctx.beginPath(); ctx.arc(5, -3, 2.4, 0, TAU); ctx.fill();
+    ell(r - 1, 2, 2.5, 2.5, '#ff8fa3');
+  } else if (e.type === 'snake') {
+    const g1 = fl ? '#fff' : '#6fbf4a', g2 = fl ? '#fff' : '#3f8f2c';
+    for (let i = 8; i >= 1; i--) { const rr = r * (0.58 - i * 0.03); ell(-i * r * 0.55, Math.sin(e.t * 6 + i * 0.9) * r * 0.45, rr, rr, i % 2 ? g1 : g2, OUT); }
+    const hy = Math.sin(e.t * 6) * r * 0.45;
+    ell(r * 0.1, hy, r * 0.78, r * 0.6, g1, OUT);
+    polyFill([r * 0.4, hy - r * 0.45, r * 0.1, hy - r * 0.2, r * 0.7, hy - r * 0.15], g2, false);
+    ctx.fillStyle = '#ffe066'; ctx.beginPath(); ctx.arc(r * 0.4, hy - r * 0.15, 3, 0, TAU); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = OUT; ctx.fillRect(r * 0.42, hy - r * 0.3, 1.8, r * 0.3);
+    if (Math.sin(e.t * 9) > -0.2) { ctx.strokeStyle = '#e8403c'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(r * 0.85, hy + r * 0.1); ctx.lineTo(r * 1.4, hy + r * 0.1); ctx.moveTo(r * 1.4, hy + r * 0.1); ctx.lineTo(r * 1.65, hy - r * 0.05); ctx.moveTo(r * 1.4, hy + r * 0.1); ctx.lineTo(r * 1.65, hy + r * 0.25); ctx.stroke(); ctx.strokeStyle = OUT; ctx.lineWidth = 2.5; }
+  } else if (e.type === 'bear') {
+    const c = fl ? '#fff' : '#5a463b', lt = fl ? '#fff' : '#c9a98a';
+    ell(-r * 0.3, r * 0.88 + wob * 0.3, r * 0.3, r * 0.2, c, OUT); ell(r * 0.35, r * 0.88 - wob * 0.3, r * 0.3, r * 0.2, c, OUT);
+    ell(0, r * 0.15, r * 1.05, r * 0.88, c, OUT);
+    ell(-r * 0.35, -r * 1.0, r * 0.26, r * 0.26, c, OUT); ell(r * 0.7, -r * 1.0, r * 0.26, r * 0.26, c, OUT);
+    ell(r * 0.2, -r * 0.55, r * 0.78, r * 0.66, c, OUT);
+    ell(r * 0.55, -r * 0.38, r * 0.38, r * 0.3, lt, OUT);
+    ell(r * 0.72, -r * 0.5, r * 0.11, r * 0.08, OUT);
+    ctx.fillStyle = OUT; ctx.beginPath(); ctx.arc(r * 0.3, -r * 0.78, 2.6, 0, TAU); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(r * 0.12, -r * 0.98); ctx.lineTo(r * 0.45, -r * 0.84); ctx.stroke();
+    ell(r * 0.78, r * 0.25, r * 0.3, r * 0.26, c, OUT);
+    ctx.strokeStyle = fl ? '#fff' : '#f4efe0'; ctx.lineWidth = 2; ctx.beginPath(); for (const k of [-0.1, 0.1, 0.3]) { ctx.moveTo(r * (0.9 + k * 0.4), r * 0.32); ctx.lineTo(r * (1.12 + k * 0.4), r * (0.5 + k * 0.1)); } ctx.stroke(); ctx.strokeStyle = OUT; ctx.lineWidth = 2.5;
+  } else if (e.type === 'healer') {
+    const c = fl ? '#fff' : '#f4f1ec', pk = fl ? '#fff' : '#ffb7c9';
+    ellRot(-r * 0.2, -r * 1.35, r * 0.28, r * 0.75, -0.2, c, OUT); ellRot(r * 0.4, -r * 1.35, r * 0.28, r * 0.75, 0.15, c, OUT);
+    ellRot(-r * 0.2, -r * 1.35, r * 0.13, r * 0.55, -0.2, pk); ellRot(r * 0.4, -r * 1.35, r * 0.13, r * 0.55, 0.15, pk);
+    ell(0, r * 0.1, r, r * 0.9, c, OUT);
+    ell(r * 0.35, -r * 0.45, r * 0.65, r * 0.58, c, OUT);
+    ctx.fillStyle = OUT; ctx.beginPath(); ctx.arc(r * 0.5, -r * 0.55, 2.4, 0, TAU); ctx.fill();
+    ell(r * 0.9, -r * 0.35, 2.2, 1.8, '#ff8fa3');
+    ctx.fillStyle = fl ? '#fff' : '#35b34a'; ctx.fillRect(-r * 0.4, r * 0.05, r * 0.7, r * 0.22); ctx.fillRect(-r * 0.16, -r * 0.2, r * 0.22, r * 0.7);
+    ell(-r * 0.9, r * 0.5, r * 0.24, r * 0.24, c, OUT);
+  } else if (e.type === 'slime') {
+    const c = fl ? '#fff' : '#4fd6a8', lt = fl ? '#fff' : '#b6f6de', sq = 1 + Math.sin(e.t * 7) * 0.08;
+    ctx.save(); ctx.translate(0, r * 0.7); ctx.scale(sq, 2 - sq); ctx.translate(0, -r * 0.7);
+    ctx.beginPath(); ctx.moveTo(-r, r * 0.7); ctx.bezierCurveTo(-r * 1.15, -r * 0.95, r * 1.15, -r * 0.95, r, r * 0.7); ctx.quadraticCurveTo(0, r * 0.98, -r, r * 0.7); ctx.closePath();
+    ctx.fillStyle = c; ctx.fill(); ctx.stroke();
+    ellRot(-r * 0.4, -r * 0.4, r * 0.28, r * 0.14, -0.6, lt);
+    ctx.restore();
+    ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(r * 0.05, -r * 0.1, r * 0.2, 0, TAU); ctx.arc(r * 0.55, -r * 0.1, r * 0.2, 0, TAU); ctx.fill();
+    ctx.fillStyle = OUT; ctx.beginPath(); ctx.arc(r * 0.1, -r * 0.08, r * 0.1, 0, TAU); ctx.arc(r * 0.6, -r * 0.08, r * 0.1, 0, TAU); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(r * 0.0, -r * 0.38); ctx.lineTo(r * 0.25, -r * 0.26); ctx.moveTo(r * 0.7, -r * 0.38); ctx.lineTo(r * 0.45, -r * 0.26); ctx.stroke();
   } else if (e.type === 'elite') {
     const c = fl ? '#fff' : '#9a8672';
     const dash = e.t % 4 > 3;
@@ -1695,6 +1958,21 @@ function drawEnemy(e) {
     ctx.fillStyle = '#fff'; ctx.fillRect(14, 10, 3, 5); ctx.strokeRect(14, 10, 3, 5);
   }
   ctx.restore();
+}
+
+function drawEnemy(e) {
+  const r = e.r, T = ETIERS[e.tier || 0];
+  ell(e.x, e.y + r * 0.9, r * 0.9, r * 0.3, 'rgba(0,0,0,.18)');
+  if (e.tier >= 2) {   // 精英和狂暴的敌人脚下有光晕
+    const ga = ctx.globalAlpha; ctx.globalAlpha = ga * (0.22 + 0.08 * Math.sin(performance.now() / 180 + e.seed));
+    ell(e.x, e.y + r * 0.25, r * 1.45, r * 1.2, T.tint); ctx.globalAlpha = ga;
+  }
+  if (e.mode === 'wind') {   // 野猪蓄力：地上显示冲撞路线
+    ctx.save(); ctx.translate(e.x, e.y); ctx.rotate(e.dir);
+    ctx.fillStyle = `rgba(230,60,40,${0.12 + 0.2 * (1 - e.mt / 0.7)})`; ctx.fillRect(0, -r * 0.8, 380, r * 1.6);
+    ctx.restore();
+  }
+  if (e.tier > 0 && T.tint) drawEnemyTinted(e); else drawEnemyBody(e);
   // 冰冻效果
   if (L.buffT.freeze > 0) {
     ctx.lineWidth = 2;
@@ -1702,13 +1980,28 @@ function drawEnemy(e) {
   }
   // 血条
   const big = e.type === 'boss' || e.type === 'elite';
-  if (e.hp < e.maxHp || big) {
-    const bw = e.type === 'boss' ? 96 : e.type === 'elite' ? 56 : r * 2;
+  let top = e.y - r - 14;
+  if (e.hp < e.maxHp || big || e.tier > 0) {
+    const bw = e.type === 'boss' ? 96 : e.type === 'elite' ? 56 : Math.max(r * 2, 26);
     const by = e.y - (e.z || 0) - (e.type === 'boss' ? (e.kind.barY || r + 34) : r + (e.type === 'elite' ? 26 : 14));
+    top = by;
     if (e.type === 'boss') outlined(e.kind.name, e.x, by - 12, 14, e.hp < e.maxHp / 2 ? '#ff9a8a' : '#fff');
     ctx.fillStyle = OUT; ctx.fillRect(e.x - bw / 2 - 1, by - 1, bw + 2, 6);
-    ctx.fillStyle = big ? '#c8402d' : '#ff7a5c'; ctx.fillRect(e.x - bw / 2, by, bw * clamp(e.hp / e.maxHp, 0, 1), 4);
+    ctx.fillStyle = big ? '#c8402d' : T.bar; ctx.fillRect(e.x - bw / 2, by, bw * clamp(e.hp / e.maxHp, 0, 1), 4);
   }
+  // 强度星星：几颗星就是第几档
+  for (let i = 0; i < e.tier; i++) drawStar(e.x + (i - (e.tier - 1) / 2) * 12, top - 9, 5.5, T.bar, OUT, 1.5);
+  // 追猫的敌人头上有红色准星
+  if (e.hunter && !big) {
+    const mx = e.x, my = top - (e.tier > 0 ? 24 : 11);
+    ctx.lineCap = 'round';
+    for (const [col, w] of [['#fff', 4.5], ['#ff3b2f', 2.2]]) {
+      ctx.strokeStyle = col; ctx.lineWidth = w; ctx.beginPath(); ctx.arc(mx, my, 5, 0, TAU);
+      ctx.moveTo(mx - 9, my); ctx.lineTo(mx - 3, my); ctx.moveTo(mx + 3, my); ctx.lineTo(mx + 9, my);
+      ctx.moveTo(mx, my - 9); ctx.lineTo(mx, my - 3); ctx.moveTo(mx, my + 3); ctx.lineTo(mx, my + 9); ctx.stroke();
+    }
+  }
+  if (e.mode === 'wind') outlined('!', e.x, top - (e.hunter ? 30 : 16), 22, '#ff3b2f');
 }
 
 function flashStar(x, y, r, color) {
@@ -1838,7 +2131,11 @@ function drawHUD() {
       outlined(e.type === 'boss' ? e.kind.name : '小头目', px, py, 15, '#ff9a8a');
     }
   }
-  if (L.notice) { ctx.globalAlpha = clamp(L.notice.t, 0, 1); outlined(L.notice.text, W / 2, H * 0.24, 26, '#ff9a8a'); ctx.globalAlpha = 1; }
+  if (L.notice) {
+    ctx.font = 'bold 26px "PingFang SC","Microsoft YaHei",sans-serif';
+    const nw = ctx.measureText(L.notice.text).width, nz = Math.floor(26 * Math.min(1, (W - 24) / nw));
+    ctx.globalAlpha = clamp(L.notice.t, 0, 1); outlined(L.notice.text, W / 2, H * 0.24, nz, L.notice.color || '#ff9a8a'); ctx.globalAlpha = 1;
+  }
   // 过关庆祝：标题 → 三颗星依次出现 → 受伤情况和奖励
   if (state === 'clear') {
     const t = L.clearT, k = Math.min(1, t / 0.35), pop = 1 + 0.35 * Math.sin(k * Math.PI) * (1 - k * 0.3);
@@ -1913,7 +2210,7 @@ function render() {
   ctx.lineWidth = 2;
   for (const b of L.ebullets) {
     if (b.leaf) { ctx.save(); ctx.translate(b.x, b.y); ctx.rotate(Math.atan2(b.vy, b.vx)); ell(0, 0, 10, 5, '#5fc23f', OUT); ctx.restore(); }
-    else { ell(b.x, b.y, b.r, b.r, '#5b4a6b', OUT); ell(b.x - 1.5, b.y - 1.5, 2, 2, '#b8a8c8'); }
+    else { ell(b.x, b.y, b.r, b.r, b.col || '#5b4a6b', OUT); ell(b.x - 1.5, b.y - 1.5, 2, 2, b.col ? '#e8ffd8' : '#b8a8c8'); }
   }
   for (const p of L.parts) {
     if (p.color === 'boom') {

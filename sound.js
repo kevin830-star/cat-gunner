@@ -94,6 +94,11 @@ const SFX = (() => {
     fireBreath: [0, () => { noise(1.5, { freq: 1100, to: 350, vol: 0.5 }); tone(68, 1.5, { type: 'sawtooth', vol: 0.2 }); }],
     meteorFall: [0, () => tone(1500, 0.9, { type: 'sine', to: 220, vol: 0.09 })],
     meteorHit: [50, () => { noise(0.4, { freq: 900, to: 70, vol: 0.55 }); tone(90, 0.35, { type: 'sine', to: 32, vol: 0.5 }); }],
+    heal: [200, () => { tone(880, 0.12, { type: 'sine', vol: 0.08 }); tone(1175, 0.18, { type: 'sine', vol: 0.08, delay: 0.09 }); }],
+    boarWind: [0, () => { tone(180, 0.35, { type: 'sawtooth', to: 120, vol: 0.12 }); noise(0.3, { freq: 500, vol: 0.14 }); }],
+    bomberBlast: [40, () => { noise(0.45, { freq: 1200, to: 80, vol: 0.6 }); tone(110, 0.4, { type: 'sine', to: 35, vol: 0.55 }); }],
+    slimeSplit: [60, () => { tone(300, 0.18, { type: 'sine', to: 700, vol: 0.12 }); tone(420, 0.18, { type: 'sine', to: 900, vol: 0.1, delay: 0.05 }); }],
+    horde: [0, () => { tone(150, 0.7, { type: 'sawtooth', to: 90, vol: 0.28 }); tone(225, 0.7, { type: 'sawtooth', to: 135, vol: 0.18 }); noise(0.7, { freq: 500, vol: 0.22 }); }],
     // 界面
     buy: [0, () => { tone(1250, 0.07, { type: 'sine', vol: 0.13 }); tone(1680, 0.14, { type: 'sine', vol: 0.13, delay: 0.07 }); }],
     right: [0, () => arp([523, 659, 784, 1047], 0.09, { type: 'sine', vol: 0.15, dur: 0.18 })],
