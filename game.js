@@ -55,13 +55,23 @@ function pickFromBank(bank, key) {
 SFX.setMuted(() => store.mute);
 const initAudio = () => SFX.init();
 const sfx = new Proxy({}, { get: (_, name) => () => SFX.play(name) });
-function speak(text) {
-  if (store.mute || !window.speechSynthesis) return;
+function speak(text, interrupt = true) {
+  if (store.mute || !window.speechSynthesis || !text) return;
   try {
     const u = new SpeechSynthesisUtterance(text);
-    u.lang = 'zh-CN'; u.rate = 0.85;
-    speechSynthesis.cancel(); speechSynthesis.speak(u);
+    u.lang = 'zh-CN'; u.rate = interrupt ? 0.85 : 1;
+    if (interrupt) speechSynthesis.cancel();
+    else if (speechSynthesis.pending) speechSynthesis.cancel();   // 提示太多时只念最新的，不排长队
+    speechSynthesis.speak(u);
   } catch (e) { /* 不支持朗读 */ }
+}
+// 屏幕上的中文提示同时用语音念出来：去掉拼音、表情符号和箭头
+function announce(text) {
+  const clean = String(text)
+    .replace(/[（(][^）)]*[A-Za-zāáǎàēéěèīíǐìōóǒòūúǔùǖǘǚǜü][^）)]*[）)]/g, '')
+    .replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE0F}]/gu, '')
+    .replace(/[→·]/g, '，').replace(/\s+/g, ' ').trim();
+  speak(clean, false);
 }
 
 // ---------- 画布与镜头 ----------
@@ -346,6 +356,7 @@ function startLevel() {
     eliteTimes: eliteSchedule(G.level), hordeTimes: hordeSchedule(G.level), notice: null, clearT: 0, fireworkT: 0,
   };
   camZoom = 1;
+  announce(`第 ${G.level} 关，${L.isBoss ? '头目关，头目会在最后出现' : '保卫猫窝'}`);
   // 开局满血视觉反馈
   ring(L.cat.x, L.cat.y, 65, '#7ed957', 0.55);
   addText(L.cat.x, L.cat.y - 34, `猫咪生命已回满 (${fullCatHp})`, '#9cff6b', 15, 1.4);
@@ -410,6 +421,7 @@ function useCatnip() {
   if (st.uses <= 0 || L.catnipT > 0) return;
   st.uses--; L.catnipT = 5 + 2 * st.lv;
   addText(L.cat.x, L.cat.y - 34, '猫薄荷！', '#9cff6b', 18);
+  announce('猫薄荷');
   sfx.catnip();
 }
 
@@ -430,6 +442,7 @@ function useShockwave() {
   burst(c.x, c.y, '#4fc3ff', 28, 340);
   burst(c.x, c.y, '#ffe066', 18, 260);
   addText(c.x, c.y - 44, '💥 冲击波！全屏震退五格！', '#4fc3ff', 21, 1.5);
+  announce('冲击波');
   // 震碎场上所有敌方子弹
   L.ebullets = [];
   const stunDur = 1.2 + 0.4 * (st.lv - 1);
@@ -467,6 +480,7 @@ function triggerRedRage() {
   burst(c.x, c.y, '#ffb347', 18, 200);
   addText(c.x, c.y - 52, '✨ 答对觉醒！金光巨化 5 秒！', '#ffe066', 20, 2.2);
   sfx.redPowerup();
+  announce('答对了，金光觉醒');
 }
 
 // ---------- 效果 ----------
@@ -1066,6 +1080,8 @@ function update(rawDt) {
   if (L.catnipT > 0) L.catnipT -= rawDt;
   if (L.shockwaveCd > 0) L.shockwaveCd = Math.max(0, L.shockwaveCd - rawDt);
   for (const k in L.buffT) if (L.buffT[k] > 0) L.buffT[k] -= rawDt;
+  if (L.notice && L.notice !== L.saidNotice) { L.saidNotice = L.notice; announce(L.notice.text); }
+  if (L.toast && L.toast !== L.saidToast) { L.saidToast = L.toast; announce(L.toast.text); }
   if (L.notice) { L.notice.t -= rawDt; if (L.notice.t <= 0) L.notice = null; }
   if (L.toast) { L.toast.t -= rawDt; if (L.toast.t <= 0) L.toast = null; }
 
@@ -1358,6 +1374,8 @@ function openShop() {
     saveRun();
     showUnlock(uid);
   }
+  // 每关结束后自动弹出汉字小游戏（解锁动画会盖在上面，点掉后就能答题）
+  if (!G.miniPlayed) openMini();
 }
 function gameOver(reason) {
   camZoom = 1;
@@ -1621,6 +1639,7 @@ function reviveFromExam() {
   ring(L.cat.x, L.cat.y, 180, '#7ed957', 0.6, true);
   burst(L.cat.x, L.cat.y, '#ffe066', 26, 260);
   addText(L.cat.x, L.cat.y - 44, '🎉 考试通过！满血复活！', '#9cff6b', 20, 2.0);
+  announce('考试通过，满血复活');
   sfx.transform();
   show(null);
   setState('playing');
@@ -1643,6 +1662,7 @@ function toneVariants(py) {
 }
 const miniType = () => MINI_TYPES[(G.level - 1) % MINI_TYPES.length];
 const miniReward = () => 12 + 3 * G.level;
+const MINI_TOTAL = 5, MINI_PERFECT = 25;   // 每次 5 题；全对额外奖励
 let mini = null;
 function makeMiniQuestion(type) {
   if (type === 'pic') {
@@ -1678,7 +1698,7 @@ function openMini() {
   G.miniPlayed = true;
   saveRun();
   const type = miniType();
-  mini = { type, i: 0, right: 0, total: 3, q: makeMiniQuestion(type.id), chosen: -1 };
+  mini = { type, i: 0, right: 0, total: MINI_TOTAL, q: makeMiniQuestion(type.id), chosen: -1 };
   setState('mini');
   renderMini();
   show('mini');
@@ -1713,12 +1733,12 @@ function nextMini() {
   const m = mini;
   if (m.i + 1 < m.total) { m.i++; m.chosen = -1; m.q = makeMiniQuestion(m.type.id); return renderMini(); }
   const perfect = m.right === m.total;
-  const reward = m.right * miniReward() + (perfect ? 15 : 0);
+  const reward = m.right * miniReward() + (perfect ? MINI_PERFECT : 0);
   G.fish += reward;
   saveRun();
   if (reward) sfx.buy();
   $('miniBody').innerHTML = `<h2>${perfect ? '全部答对！太棒了！' : '小游戏结束'}</h2>
-    <div class="stat">答对 <b>${m.right}</b> / ${m.total} 题${perfect ? '<br>全对奖励 +15 🐟' : ''}<br>一共获得 <b>${reward}</b> 🐟 小鱼干</div>
+    <div class="stat">答对 <b>${m.right}</b> / ${m.total} 题${perfect ? `<br>全对奖励 +${MINI_PERFECT} 🐟` : ''}<br>一共获得 <b>${reward}</b> 🐟 小鱼干</div>
     <button class="big" data-action="miniDone">回到商店</button>`;
 }
 
@@ -1736,7 +1756,7 @@ function renderShop() {
   let h = `<div class="shophead"><h2>第 ${G.level} 关完成！<span class="stars">${starRow(G.lastStars)}</span></h2>
     <div class="fishbar">🐟 ${fish}</div></div>
     <div style="font-size:13px;margin:2px 0 8px">过关奖励 +${G.lastBonus}${G.lastStarBonus ? `, 星级奖励 +${G.lastStarBonus}` : ''} 🐟 · 累计 ★ ${totalStars} · 下一关开始猫咪生命自动回满 (${catMaxHp()} HP)</div>
-    <div class="minicard"><div class="txt"><b>汉字小游戏 · ${mt.name}</b><br>答 3 道题，每答对一题 +${miniReward()} 🐟，全对再 +15 🐟。</div>${btn('mini', '', G.miniPlayed ? '已玩过' : '开始', !G.miniPlayed)}</div>`;
+    <div class="minicard"><div class="txt"><b>汉字小游戏 · ${mt.name}</b><br>答 ${MINI_TOTAL} 道题，每答对一题 +${miniReward()} 🐟，全对再 +${MINI_PERFECT} 🐟。</div>${btn('mini', '', G.miniPlayed ? '已玩过' : '开始', !G.miniPlayed)}</div>`;
 
   // 武器库
   const own = ownedList(), canMerge = own.some(o => o.tier < TIERS.length - 1 && o.n >= MERGE_NEED[o.tier]);
@@ -1837,6 +1857,7 @@ function showUnlock(id) {
     </div>`;
   el.classList.add('show');
   sfx.unlock();
+  announce(`解锁新道具：${it.name}`);
   clearTimeout(unlockTimer);
   unlockTimer = setTimeout(hideUnlock, 4200);
 }
