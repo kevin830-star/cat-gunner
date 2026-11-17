@@ -110,8 +110,22 @@ canvas.addEventListener('touchend', endTouch);
 canvas.addEventListener('touchcancel', endTouch);
 
 $('btnPause').addEventListener('click', () => { if (state === 'playing') pauseGame(); });
-$('btnWeapon').addEventListener('click', () => { if (state === 'playing') cycleWeapon(1); });
-$('btnCatnip').addEventListener('click', () => { if (state === 'playing') useCatnip(); });
+// 右下角的道具栏：用 pointerdown（按下即触发）。
+// 手机上一根手指按着屏幕控制移动时，另一根手指点按钮不会产生 click，所以不能用 click。
+const ibEls = {};
+(function buildItemBar() {
+  const bar = $('itemBar');
+  const mk = (id, html, cls = '') => { const b = document.createElement('button'); b.className = 'ib ' + cls; b.dataset.ib = id; b.innerHTML = html; bar.appendChild(b); ibEls[id] = { el: b, sig: null }; };
+  mk('weapon', '<img alt=""><span class="tierb"></span><span class="key">Q</span>', 'wb');
+  for (const it of ITEMS) mk(it.id, `<img src="${ICONS.url[it.id]}" alt=""><span class="cd"></span><span class="ct"></span>${it.manual ? '<span class="key">空格</span>' : ''}`);
+  bar.addEventListener('pointerdown', e => {
+    const b = e.target.closest('.ib');
+    if (!b || state !== 'playing') return;
+    e.preventDefault(); initAudio();
+    pressItem(b.dataset.ib);
+  });
+  bar.addEventListener('contextmenu', e => e.preventDefault());
+})();
 
 // ---------- 游戏状态 ----------
 let state = 'menu';   // menu | playing | paused | quiz | shop | mini | over
@@ -189,7 +203,7 @@ function setState(s) {
   state = s;
   mouse.down = false;
   $('btnPause').style.display = (s === 'playing') ? '' : 'none';
-  $('touchBtns').style.visibility = (s === 'playing') ? 'visible' : 'hidden';
+  $('itemBar').style.visibility = (s === 'playing') ? 'visible' : 'hidden';
 }
 
 const freshRun = () => {
@@ -296,6 +310,21 @@ function cycleWeapon(dir) {
   G.eq = { id: nx.id, tier: nx.tier };
   addText(L.cat.x, L.cat.y - 34, `${weaponDef(nx.id).name} ${TIERS[nx.tier].id}`, tierColor(nx.tier), 15);
   sfx.switch();
+}
+function toast(text) { L.toast = { text, t: 2 }; }
+// 点道具栏上的按钮：换枪、使用猫薄荷；其他道具是每关自动生效的，点一下只给出说明
+function pressItem(id) {
+  if (id === 'weapon') {
+    if (ownedList().length < 2) return toast('只有一把武器，去商店买新的或合成');
+    return cycleWeapon(1);
+  }
+  const it = itemDef(id), st = G.items[id];
+  if (it.manual) {
+    if (L.catnipT > 0) return;
+    if (st.uses <= 0) return toast(`${it.name}用完了，去商店补充`);
+    return useCatnip();
+  }
+  toast(st.uses > 0 ? `${it.name}已自动生效，还剩 ${st.uses} 次（每关用 1 次）` : `${it.name}本关生效，已是最后一次，去商店补充`);
 }
 function useCatnip() {
   const st = G.items.catnip;
@@ -763,6 +792,7 @@ function update(dt) {
   if (L.catnipT > 0) L.catnipT -= dt;
   for (const k in L.buffT) if (L.buffT[k] > 0) L.buffT[k] -= dt;
   if (L.notice) { L.notice.t -= dt; if (L.notice.t <= 0) L.notice = null; }
+  if (L.toast) { L.toast.t -= dt; if (L.toast.t <= 0) L.toast = null; }
 
   // 移动
   let mx = 0, my = 0;
@@ -1740,6 +1770,29 @@ function outlined(text, x, y, size, color = '#fff', align = 'center') {
   ctx.strokeText(text, x, y); ctx.fillStyle = color; ctx.fillText(text, x, y);
 }
 
+// 道具栏：图片 + 剩余次数。只在内容变化时才改 DOM
+function updateItemBar() {
+  const eq = G.eq, w = ibEls.weapon, wsig = eq.id + ':' + eq.tier;
+  if (w.sig !== wsig) {
+    w.sig = wsig;
+    w.el.querySelector('img').src = ICONS.url[eq.id];
+    w.el.querySelector('.tierb').innerHTML = tierBadge(eq.tier);
+  }
+  for (const it of ITEMS) {
+    const x = ibEls[it.id], st = G.items[it.id], on = L.on[it.id] || 0, cool = it.manual ? Math.ceil(Math.max(0, L.catnipT)) : 0;
+    const show = it.manual ? (st.uses > 0 || cool > 0) : on > 0;
+    const sig = `${show}|${st.uses}|${on}|${cool}`;
+    if (x.sig === sig) continue;
+    x.sig = sig;
+    x.el.style.display = show ? '' : 'none';
+    const ct = x.el.querySelector('.ct');
+    ct.textContent = `×${st.uses}`; ct.classList.toggle('zero', st.uses === 0);
+    x.el.classList.toggle('on', it.manual ? cool > 0 : on > 0);
+    const cd = x.el.querySelector('.cd');
+    cd.textContent = cool > 0 ? cool + '秒' : ''; cd.style.display = cool > 0 ? 'flex' : 'none';
+  }
+}
+
 function drawHUD() {
   const bw = Math.min(150, W * 0.34);
   hudBar(8, 8, bw, '猫咪', L.cat.hp, catMaxHp(), '#ff7a8a');
@@ -1751,16 +1804,12 @@ function drawHUD() {
   else outlined(L.boss ? '打败头目！' : '过关！', cx, 42, 20, L.boss ? '#ff9a8a' : '#c9ff9e', al);
   outlined(`🐟 ${G.fish}`, narrow ? W - 58 : W - 60, narrow ? 68 : 28, 18, '#ffe9a8', 'right');
   // 武器与增益
-  const w = weaponDef(G.eq.id), cn = G.items.catnip;
+  const w = weaponDef(G.eq.id);
   let y = 66;
   ctx.drawImage(ICONS.canvas[w.id], 8, y - 15, 30, 30);
   outlined(w.name, 42, y, 14, '#fff', 'left');
   drawTierBadge(42 + ctx.measureText(w.name).width + 8, y, G.eq.tier);
   y += 28;
-  if (cn.uses > 0 || L.catnipT > 0) {
-    ctx.drawImage(ICONS.canvas.catnip, 10, y - 13, 26, 26);
-    outlined(`猫薄荷 ×${cn.uses}${L.catnipT > 0 ? `（${Math.ceil(L.catnipT)}秒）` : ''}`, 42, y, 14, '#c9ff9e', 'left'); y += 26;
-  }
   if (L.atkBuff > 0) { outlined(`攻击力 +${Math.round(L.atkBuff * 100)}%`, 10, y, 14, '#ffe066', 'left'); y += 24; }
   for (const b of BUFFS) {
     const t = L.buffT[b.id];
@@ -1770,18 +1819,8 @@ function drawHUD() {
     outlined(`${b.name} ${Math.ceil(t)}秒`, 42, y, 14, '#fff', 'left');
     y += 26;
   }
-  // 本关生效的道具和剩余次数
-  let ix = 10;
-  for (const it of ITEMS) {
-    if (it.manual || !L.on[it.id]) continue;
-    if (ix > W - 130) { ix = 10; y += 28; }
-    const left = G.items[it.id].uses;
-    ctx.drawImage(ICONS.canvas[it.id], ix, y - 12, 24, 24);
-    outlined(left > 0 ? `×${left}` : '最后一次', ix + 26, y + 1, 11, left > 0 ? '#fff' : '#ffb0a0', 'left');
-    ix += left > 0 ? 56 : 92;
-  }
-  $('btnCatnip').disabled = cn.uses <= 0 || L.catnipT > 0;
-  $('btnCatnip').style.display = cn.uses > 0 || L.catnipT > 0 ? '' : 'none';
+  updateItemBar();
+  if (L.toast) { ctx.globalAlpha = clamp(L.toast.t, 0, 1); outlined(L.toast.text, W / 2, H * 0.74, 15, '#fff'); ctx.globalAlpha = 1; }
 
   if (L.banner > 0 && state !== 'clear') {
     ctx.globalAlpha = clamp(L.banner, 0, 1);

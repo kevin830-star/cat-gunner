@@ -10,13 +10,34 @@ html, body {
   position: fixed; top: 8px; right: 8px; width: 40px; height: 40px; z-index: 5;
   border: 3px solid #4a3423; border-radius: 12px; background: #fff6df; font-size: 18px; cursor: pointer;
 }
-#touchBtns { position: fixed; right: 14px; bottom: 22px; z-index: 5; display: none; flex-direction: column; gap: 12px; }
-body.touch #touchBtns { display: flex; }
-#touchBtns button {
-  width: 78px; height: 78px; border-radius: 50%; border: 3px solid #4a3423;
-  background: rgba(255, 246, 223, .85); font: inherit; font-weight: 700; font-size: 15px; color: #4a3423;
+/* 右下角道具栏：圆形图片按钮，右下角的数字是剩余次数 */
+#itemBar {
+  position: fixed; right: 14px; bottom: calc(22px + env(safe-area-inset-bottom)); z-index: 5;
+  display: flex; flex-direction: row-reverse; flex-wrap: wrap-reverse; justify-content: flex-start; gap: 14px 12px; width: 140px;
 }
-#touchBtns button:disabled { opacity: .4; }
+.ib {
+  position: relative; width: 58px; height: 58px; border-radius: 50%; padding: 0; cursor: pointer;
+  border: 3px solid #4a3423; background: rgba(255, 246, 223, .92); touch-action: none; -webkit-user-select: none; user-select: none;
+}
+.ib:active { transform: scale(.92); }
+.ib img { width: 42px; height: 42px; pointer-events: none; display: block; margin: 0 auto; }
+.ib .ct {
+  position: absolute; right: -7px; bottom: -8px; min-width: 26px; padding: 0 5px; border: 2px solid #fff; border-radius: 11px;
+  background: #4a3423; color: #fff; font: 700 13px/18px system-ui, sans-serif; text-align: center; pointer-events: none;
+}
+.ib .ct.zero { background: #c8402d; }
+.ib .tierb { position: absolute; right: -8px; bottom: -9px; pointer-events: none; }
+.ib .tierb .tier { font-size: 11px; padding: 0 4px; border-width: 2px; border-radius: 7px; }
+.ib .cd {
+  position: absolute; inset: 0; border-radius: 50%; display: none; align-items: center; justify-content: center;
+  background: rgba(40, 60, 20, .55); color: #fff; font: 900 14px system-ui, sans-serif; pointer-events: none;
+}
+.ib.on { border-color: #5fc23f; box-shadow: 0 0 0 3px rgba(95, 194, 63, .4); }
+.ib .key {
+  position: absolute; left: -6px; top: -8px; padding: 0 4px; border: 1.5px solid #4a3423; border-radius: 6px;
+  background: #fff; font: 700 10px/14px system-ui, sans-serif; pointer-events: none;
+}
+body.touch .ib .key { display: none; }
 
 .overlay {
   position: fixed; inset: 0; z-index: 10; display: none; align-items: center; justify-content: center;
