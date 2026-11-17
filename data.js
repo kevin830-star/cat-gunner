@@ -160,7 +160,7 @@ const FILL_QUIZ = [
 
 // ---------- 题库 2：成语填空 ----------
 const IDIOM_QUIZ = [
-  { grade: 1, s: '一____一意（形容做事专心，不分心）', opts: ['心|xīn', '手|shǒu', '口|kǒu', '目|mù'], py: 'yì xīn yí yì', en: 'Wholeheartedly / with undivided attention' },
+  { grade: 1, s: '一____一意（形容做事全神贯注，只想着一件事）', opts: ['心|xīn', '手|shǒu', '口|kǒu', '目|mù'], py: 'yì xīn yí yì', en: 'Wholeheartedly / with undivided attention' },
   { grade: 1, s: '五____六色（形容色彩非常丰富）', opts: ['颜|yán', '花|huā', '光|guāng', '彩|cǎi'], py: 'wǔ yán liù sè', en: 'Colorful / of all colors' },
   { grade: 1, s: '九____一毛（比喻极大数量中的极小部分）', opts: ['牛|niú', '马|mǎ', '羊|yáng', '虎|hǔ'], py: 'jiǔ niú yì máo', en: 'A drop in the ocean (lit. one hair from nine oxen)' },
   { grade: 1, s: '马到____功（形容事情顺利，一开始就取得胜利）', opts: ['成|chéng', '生|shēng', '真|zhēn', '大|dà'], py: 'mǎ dào chéng gōng', en: 'Win instant success' },
@@ -180,26 +180,26 @@ const IDIOM_QUIZ = [
   { grade: 3, s: '锦上添____（比喻好上加好，更加完美）', opts: ['花|huā', '叶|yè', '金|jīn', '彩|cǎi'], py: 'jǐn shàng tiān huā', en: 'Add flowers to brocade (make perfection still more perfect)' },
   { grade: 3, s: '水滴____穿（比喻只要坚持不懈，再难的事也能成功）', opts: ['石|shí', '木|mù', '铁|tiě', '山|shān'], py: 'shuǐ dī shí chuān', en: 'Dripping water wears through stone (perseverance prevails)' },
   { grade: 3, s: '自相矛____（比喻自己说话或做事前后抵触）', opts: ['盾|dùn', '剑|jiàn', '枪|qiāng', '刀|dāo'], py: 'zì xiāng máo dùn', en: 'Self-contradictory (spear vs. shield)' },
-  { grade: 3, s: '半____而废（比喻做事没有坚持到底，中途停顿）', opts: ['途|tú', '路|lù', '天|tiān', '步|bù'], py: 'bàn tú ér fèi', en: 'Give up halfway' },
+  { grade: 3, s: '半____而废（比喻做事没有坚持到底，做到一半就放弃了）', opts: ['途|tú', '路|lù', '天|tiān', '步|bù'], py: 'bàn tú ér fèi', en: 'Give up halfway' },
   { grade: 3, s: '愚公移____（比喻不怕困难，坚持奋斗到底）', opts: ['山|shān', '石|shí', '河|hé', '海|hǎi'], py: 'Yúgōng yí shān', en: 'The Foolish Old Man moves mountains (unyielding perseverance)' },
 ];
 
 // ---------- 题库 3：古诗名句填空 ----------
 const POEM_QUIZ = [
-  { grade: 1, s: '举头望明月，低头思____。（李白《静夜思》）', opts: ['故乡|gùxiāng', '朋友|péngyou', '太阳|tàiyáng', '春风|chūnfēng'], py: 'Jǔ tóu wàng míngyuè, dī tóu sī gùxiāng.', en: 'Raising my head, I gaze at the bright moon; bowing my head, I think of my hometown.' },
-  { grade: 1, s: '白毛浮绿水，红掌拨清____。（骆宾王《咏鹅》）', opts: ['波|bō', '风|fēng', '云|yún', '沙|shā'], py: 'Bái máo fú lǜ shuǐ, hóng zhǎng bō qīng bō.', en: 'White feathers float on green water; red webbed feet paddle clear waves.' },
-  { grade: 1, s: '春眠不觉晓，处处闻啼____。（孟浩然《春晓》）', opts: ['鸟|niǎo', '虫|chóng', '猫|māo', '蛙|wā'], py: 'Chūn mián bù jué xiǎo, chùchù wén tí niǎo.', en: 'Sleeping in spring, unaware of dawn; everywhere I hear singing birds.' },
-  { grade: 1, s: '锄禾日当午，汗滴禾下____。（李绅《悯农》）', opts: ['土|tǔ', '水|shuǐ', '草|cǎo', '田|tián'], py: 'Chú hé rì dāng wǔ, hàn dī hé xià tǔ.', en: 'Hoeing grain at noon, sweat drips into the soil beneath the crops.' },
-  { grade: 1, s: '远看____有色，近听水无声。（王维《画》）', opts: ['山|shān', '花|huā', '云|yún', '树|shù'], py: 'Yuǎn kàn shān yǒu sè, jìn tīng shuǐ wú shēng.', en: 'Seen from afar, the mountains have color; listened to closely, the water makes no sound.' },
-  { grade: 2, s: '欲穷千里目，更上一层____。（王之涣《登鹳雀楼》）', opts: ['楼|lóu', '山|shān', '云|yún', '天|tiān'], py: 'Yù qióng qiān lǐ mù, gèng shàng yì céng lóu.', en: 'To see a thousand miles further, climb one story higher.' },
-  { grade: 2, s: '飞流直下三千尺，疑是银河落____天。（李白《望庐山瀑布》）', opts: ['九|jiǔ', '七|qī', '八|bā', '十|shí'], py: 'Fēi liú zhí xià sān qiān chǐ, yí shì yínhé luò jiǔ tiān.', en: 'The torrent plunges three thousand feet, as if the Milky Way fell from the ninth heaven.' },
-  { grade: 2, s: '小荷才露尖尖角，早有蜻蜓立上____。（杨万里《小池》）', opts: ['头|tóu', '叶|yè', '花|huā', '枝|zhī'], py: 'Xiǎo hé cái lù jiānjiān jiǎo, zǎo yǒu qīngtíng lì shàng tóu.', en: 'The young lotus has barely shown its pointed bud, and already a dragonfly stands upon it.' },
-  { grade: 2, s: '儿童散学归来早，忙趁东风放纸____。（高鼎《村居》）', opts: ['鸢|yuān', '船|chuán', '球|qiú', '灯|dēng'], py: 'Értóng sànxué guīlái zǎo, máng chèn dōngfēng fàng zhǐyuān.', en: 'Children return early from school and hurry to fly kites in the east wind.' },
-  { grade: 2, s: '两个黄鹂鸣翠柳，一行白鹭上青____。（杜甫《绝句》）', opts: ['天|tiān', '山|shān', '云|yún', '水|shuǐ'], py: 'Liǎng gè huánglí míng cuì liǔ, yì háng báilù shàng qīng tiān.', en: 'Two orioles sing among green willows; a line of egrets ascends into the blue sky.' },
-  { grade: 3, s: '孤帆远影碧空尽，唯见长江天际____。（李白《黄鹤楼送孟浩然之广陵》）', opts: ['流|liú', '走|zǒu', '飞|fēi', '来|lái'], py: 'Gū fān yuǎn yǐng bìkōng jìn, wéi jiàn Chángjiāng tiānjì liú.', en: 'The lone sail’s distant shadow vanishes into the blue sky; all I see is the Yangtze flowing to the horizon.' },
-  { grade: 3, s: '独在异乡为异客，每逢佳节____思亲。（王维《九月九日忆山东兄弟》）', opts: ['倍|bèi', '更|gèng', '常|cháng', '多|duō'], py: 'Dú zài yìxiāng wéi yìkè, měi féng jiājié bèi sī qīn.', en: 'Alone in a foreign land as a stranger, I miss my family doubly on every festive day.' },
-  { grade: 3, s: '两岸猿声啼不住，轻舟已过____重山。（李白《早发白帝城》）', opts: ['万|wàn', '千|qiān', '百|bǎi', '九|jiǔ'], py: 'Liǎng àn yuán shēng tí bú zhù, qīngzhōu yǐ guò wàn chóng shān.', en: 'While monkeys cry endlessly on both banks, my light boat has already passed ten thousand mountains.' },
-  { grade: 3, s: '谁言寸草心，报得三____晖。（孟郊《游子吟》）', opts: ['春|chūn', '秋|qiū', '冬|dōng', '夏|xià'], py: 'Shuí yán cùn cǎo xīn, bào dé sān chūn huī.', en: 'Who says the heart of a tiny blade of grass can repay the warmth of spring sunshine?' },
+  { grade: 1, s: '举头望明月，低头思____。（李白《静夜思》）', opts: ['故乡|gùxiāng', '朋友|péngyou', '太阳|tàiyáng', '春风|chūnfēng'], py: 'Jǔ tóu wàng míngyuè, dī tóu sī gùxiāng.', zh: '抬头看着天上明亮的月亮，低下头就想念起自己从小生长的地方。', en: 'Raising my head, I gaze at the bright moon; bowing my head, I think of my hometown.' },
+  { grade: 1, s: '白毛浮绿水，红掌拨清____。（骆宾王《咏鹅》）', opts: ['波|bō', '风|fēng', '云|yún', '沙|shā'], py: 'Bái máo fú lǜ shuǐ, hóng zhǎng bō qīng bō.', zh: '白色的羽毛浮在碧绿的水面上，红色的脚掌拨动着清清的水纹。', en: 'White feathers float on green water; red webbed feet paddle clear waves.' },
+  { grade: 1, s: '春眠不觉晓，处处闻啼____。（孟浩然《春晓》）', opts: ['鸟|niǎo', '虫|chóng', '猫|māo', '蛙|wā'], py: 'Chūn mián bù jué xiǎo, chùchù wén tí niǎo.', zh: '春天睡得香甜，不知不觉天就亮了，到处都能听到会飞的小动物在欢快地叫。', en: 'Sleeping in spring, unaware of dawn; everywhere I hear singing birds.' },
+  { grade: 1, s: '锄禾日当午，汗滴禾下____。（李绅《悯农》）', opts: ['土|tǔ', '水|shuǐ', '草|cǎo', '田|tián'], py: 'Chú hé rì dāng wǔ, hàn dī hé xià tǔ.', zh: '正午太阳火辣辣的，农民伯伯在田里锄草，汗水一滴滴落进禾苗下面的泥地里。', en: 'Hoeing grain at noon, sweat drips into the soil beneath the crops.' },
+  { grade: 1, s: '远看____有色，近听水无声。（王维《画》）', opts: ['山|shān', '花|huā', '云|yún', '树|shù'], py: 'Yuǎn kàn shān yǒu sè, jìn tīng shuǐ wú shēng.', zh: '这是一首写画的诗：远远看去，画里高高的峰峦颜色鲜明；走近细听，画里的流水却没有声音。', en: 'Seen from afar, the mountains have color; listened to closely, the water makes no sound.' },
+  { grade: 2, s: '欲穷千里目，更上一层____。（王之涣《登鹳雀楼》）', opts: ['楼|lóu', '山|shān', '云|yún', '天|tiān'], py: 'Yù qióng qiān lǐ mù, gèng shàng yì céng lóu.', zh: '想要看到千里以外更远的风景，就要再往上登高一层。', en: 'To see a thousand miles further, climb one story higher.' },
+  { grade: 2, s: '飞流直下三千尺，疑是银河落____天。（李白《望庐山瀑布》）', opts: ['九|jiǔ', '七|qī', '八|bā', '十|shí'], py: 'Fēi liú zhí xià sān qiān chǐ, yí shì yínhé luò jiǔ tiān.', zh: '瀑布从高处飞奔直下，好像有三千尺那么长，让人怀疑是银河从最高最高的天上落了下来。', en: 'The torrent plunges three thousand feet, as if the Milky Way fell from the ninth heaven.' },
+  { grade: 2, s: '小荷才露尖尖角，早有蜻蜓立上____。（杨万里《小池》）', opts: ['头|tóu', '叶|yè', '花|huā', '枝|zhī'], py: 'Xiǎo hé cái lù jiānjiān jiǎo, zǎo yǒu qīngtíng lì shàng tóu.', zh: '小小的荷叶刚刚露出尖尖的角，早就有一只蜻蜓停在它的上面了。', en: 'The young lotus has barely shown its pointed bud, and already a dragonfly stands upon it.' },
+  { grade: 2, s: '儿童散学归来早，忙趁东风放纸____。（高鼎《村居》）', opts: ['鸢|yuān', '船|chuán', '球|qiú', '灯|dēng'], py: 'Értóng sànxué guīlái zǎo, máng chèn dōngfēng fàng zhǐyuān.', zh: '孩子们放学早早回到家，赶紧趁着春天的东风，把风筝放上天。', en: 'Children return early from school and hurry to fly kites in the east wind.' },
+  { grade: 2, s: '两个黄鹂鸣翠柳，一行白鹭上青____。（杜甫《绝句》）', opts: ['天|tiān', '山|shān', '云|yún', '水|shuǐ'], py: 'Liǎng gè huánglí míng cuì liǔ, yì háng báilù shàng qīng tiān.', zh: '两只黄鹂在翠绿的柳树上唱歌，一行白鹭排着队飞向蓝蓝的高空。', en: 'Two orioles sing among green willows; a line of egrets ascends into the blue sky.' },
+  { grade: 3, s: '孤帆远影碧空尽，唯见长江天际____。（李白《黄鹤楼送孟浩然之广陵》）', opts: ['流|liú', '走|zǒu', '飞|fēi', '来|lái'], py: 'Gū fān yuǎn yǐng bìkōng jìn, wéi jiàn Chángjiāng tiānjì liú.', zh: '一只小船越走越远，消失在蓝天的尽头，只看见长江的水向天边奔去。', en: 'The lone sail’s distant shadow vanishes into the blue sky; all I see is the Yangtze flowing to the horizon.' },
+  { grade: 3, s: '独在异乡为异客，每逢佳节____思亲。（王维《九月九日忆山东兄弟》）', opts: ['倍|bèi', '更|gèng', '常|cháng', '多|duō'], py: 'Dú zài yìxiāng wéi yìkè, měi féng jiājié bèi sī qīn.', zh: '一个人在外地做客，每到过节的时候，就格外想念家里的亲人。', en: 'Alone in a foreign land as a stranger, I miss my family doubly on every festive day.' },
+  { grade: 3, s: '两岸猿声啼不住，轻舟已过____重山。（李白《早发白帝城》）', opts: ['万|wàn', '千|qiān', '百|bǎi', '九|jiǔ'], py: 'Liǎng àn yuán shēng tí bú zhù, qīngzhōu yǐ guò wàn chóng shān.', zh: '两岸的猴子还在不停地叫，轻快的小船已经穿过了数不清的一座座高山。', en: 'While monkeys cry endlessly on both banks, my light boat has already passed ten thousand mountains.' },
+  { grade: 3, s: '谁言寸草心，报得三____晖。（孟郊《游子吟》）', opts: ['春|chūn', '秋|qiū', '冬|dōng', '夏|xià'], py: 'Shuí yán cùn cǎo xīn, bào dé sān chūn huī.', zh: '谁说像小草一样微小的孝心，能报答得了母亲像温暖阳光一样的恩情呢？', en: 'Who says the heart of a tiny blade of grass can repay the warmth of spring sunshine?' },
 ];
 
 // ---------- 题库 4：读音选择（声调与多音字辨析） ----------

@@ -1414,6 +1414,12 @@ function gameOver(reason) {
 }
 
 // ---------- 头目中文题（涵盖词语填空、成语填空、古诗名句填空） ----------
+// 成语题：括号里是意思，单独拿出来做中文解释；古诗题：用 zh 字段的中文解释
+const idiomMeaning = q => (q.s.match(/（(.*?)）/) || [])[1] || '';
+const idiomText = q => q.s.replace(/（.*?）/g, '');
+const zhOf = (q, kind) => kind === 'idiom' ? idiomMeaning(q) : q.zh || '';
+// 题目出现时朗读：先读中文解释，再读题目（空格读作「什么」，不读作者）
+const questionSpeech = (q, kind) => `${kind === 'idiom' ? '意思是：' : ''}${zhOf(q, kind).replace(/[。？！]$/, '')}。${q.s.replace(/（.*?）/g, '').replace('____', '什么')}`;
 const pyTag = py => store.pinyin && py ? `<small>${py}</small>` : '';
 let quiz = null;
 function openQuiz(title) {
@@ -1424,18 +1430,20 @@ function openQuiz(title) {
   const q = pickFromBank(bank, bKey);
   const opts = shuffle(q.opts.map((o, i) => { const [w, py] = o.split('|'); return { w, py, ok: i === 0 }; }));
   const gName = GRADE_LEVELS[q.grade || 1].short;
-  quiz = { q, opts, title, qType, gName, answered: false, correct: false };
+  quiz = { q, opts, title, qType, gName, bKey, answered: false, correct: false };
   setState('quiz');
   renderQuiz();
   show('quiz');
+  if (bKey === 'idiom' || bKey === 'poem') speak(questionSpeech(q, bKey));
 }
 function renderQuiz(chosen) {
-  const { q, opts, title, qType, gName, answered } = quiz;
+  const { q, opts, title, qType, gName, answered, bKey } = quiz;
   const ans = q.opts[0].split('|')[0];
-  const sent = q.s.replace('____', `<span class="blank">${answered ? ans : '&nbsp;'}</span>`);
+  const zhq = bKey === 'idiom' || bKey === 'poem';
+  const sent = (bKey === 'idiom' ? idiomText(q) : q.s).replace('____', `<span class="blank">${answered ? ans : '&nbsp;'}</span>`);
   let h = `<div class="qbadge">📚 ${qType} · ${gName}</div>
     <div class="qtitle">⚠️ ${title} 答对问题：攻击力 +50% 并触发 5 秒金光觉醒！</div>
-    <div class="qsent">${sent}</div><div class="opts">`;
+    <div class="qsent">${sent}</div>${zhq ? `<div class="qhint">${bKey === 'idiom' ? '意思：' : ''}${zhOf(q, bKey)}</div>` : ''}<div class="opts">`;
   opts.forEach((o, i) => {
     let cls = 'opt';
     if (answered) { if (o.ok) cls += ' right'; else if (i === chosen) cls += ' wrong'; }
@@ -1448,7 +1456,7 @@ function renderQuiz(chosen) {
     h += `<div class="qfb">
       <div class="res ${ok ? 'ok' : 'no'}">${ok ? '答对了！攻击力 +50% · 准备金光觉醒！' : '答错了，正确答案是「' + ans + '」'}</div>
       <div class="full">${q.s.replace('____', ans)}<button class="speak" data-action="speak" data-t="${cleanSent}">🔊</button></div>
-      <div>${q.py}</div><div>${q.en}</div>
+      <div>${q.py}</div>${zhq ? '' : `<div>${q.en}</div>`}
       <button class="big" data-action="quizDone">${ok ? '🔥 觉醒并继续战斗' : '继续战斗'}</button>`;
   }
   $('quizBody').innerHTML = h;
@@ -1521,11 +1529,12 @@ function makeExamQuestion(kind) {
     const ans = q.opts[0].split('|')[0];
     return {
       qType: '成语填空', gName,
-      prompt: `<div class="qsent">${q.s.replace('____', '<span class="blank">&nbsp;</span>')}</div><div class="qhint">${q.en}</div>`,
-      answeredPrompt: `<div class="qsent">${q.s.replace('____', `<span class="blank">${ans}</span>`)}</div>`,
+      prompt: `<div class="qsent">${idiomText(q).replace('____', '<span class="blank">&nbsp;</span>')}</div><div class="qhint">意思：${idiomMeaning(q)}</div>`,
+      answeredPrompt: `<div class="qsent">${idiomText(q).replace('____', `<span class="blank">${ans}</span>`)}</div><div class="qhint">意思：${idiomMeaning(q)}</div>`,
       opts: shuffle(q.opts.map((o, i) => { const [w, py] = o.split('|'); return { t: w, sub: py, ok: i === 0 }; })),
       ansText: ans,
-      info: `${q.py} · ${q.en}`,
+      info: q.py,
+      speakQ: questionSpeech(q, 'idiom'),
       say: q.s.replace('____', ans).replace(/（.*?）/g, ''),
     };
   }
@@ -1593,6 +1602,7 @@ function renderExam() {
   }
   const q = ex.questions[ex.i];
   const answered = ex.chosen >= 0;
+  if (!answered && q.speakQ && ex.saidI !== ex.i) { ex.saidI = ex.i; speak(q.speakQ); }
   const dots = ex.results.map((r, idx) => {
     const cls = r === true ? 'ok' : r === false ? 'no' : idx === ex.i ? 'cur' : '';
     return `<div class="exam-dot ${cls}">${r === true ? '✓' : r === false ? '✗' : idx + 1}</div>`;
@@ -1716,8 +1726,8 @@ function makeMiniQuestion(type) {
   if (type === 'idiom') {
     const q = pickFromBank(IDIOM_QUIZ, 'mini_idiom');
     const ans = q.opts[0].split('|')[0];
-    return { prompt: `<div class="qsent">${q.s.replace('____', '<span class="blank">&nbsp;</span>')}</div><div class="qhint">${q.en}</div>`,
-      opts: shuffle(q.opts.map((o, i) => ({ t: o.split('|')[0], ok: i === 0 }))), info: `${q.s.replace('____', ans)} (${q.py})`, say: q.s.replace('____', ans).replace(/（.*?）/g, '') };
+    return { prompt: `<div class="qsent">${idiomText(q).replace('____', '<span class="blank">&nbsp;</span>')}</div><div class="qhint">意思：${idiomMeaning(q)}</div>`,
+      opts: shuffle(q.opts.map((o, i) => ({ t: o.split('|')[0], ok: i === 0 }))), info: `${idiomText(q).replace('____', ans)} (${q.py})`, say: idiomText(q).replace('____', ans), speakQ: questionSpeech(q, 'idiom') };
   }
   if (type === 'word') {
     const q = pickFromBank(FILL_QUIZ, 'mini_word');
@@ -1733,8 +1743,8 @@ function makeMiniQuestion(type) {
   if (type === 'poem') {
     const q = pickFromBank(POEM_QUIZ, 'mini_poem');
     const ans = q.opts[0].split('|')[0];
-    return { prompt: `<div class="qsent">${q.s.replace('____', '<span class="blank">&nbsp;</span>')}</div><div class="qhint">${q.en}</div>`,
-      opts: shuffle(q.opts.map((o, i) => ({ t: o.split('|')[0], ok: i === 0 }))), info: `${q.s.replace('____', ans)} (${q.py})`, say: q.s.replace('____', ans).replace(/（.*?）/g, '') };
+    return { prompt: `<div class="qsent">${q.s.replace('____', '<span class="blank">&nbsp;</span>')}</div><div class="qhint">${q.zh}</div>`,
+      opts: shuffle(q.opts.map((o, i) => ({ t: o.split('|')[0], ok: i === 0 }))), info: `${q.s.replace('____', ans)} (${q.py})`, say: q.s.replace('____', ans).replace(/（.*?）/g, ''), speakQ: questionSpeech(q, 'poem') };
   }
   const singlePool = PIC_WORDS.filter(w => w.c.length === 1);
   const w = pickFromBank(singlePool, 'mini_tone');
@@ -1753,6 +1763,7 @@ function openMini() {
 }
 function renderMini() {
   const m = mini, q = m.q, answered = m.chosen >= 0;
+  if (!answered && q.speakQ && m.saidI !== m.i) { m.saidI = m.i; speak(q.speakQ); }
   let h = `<div class="qtitle">汉字小游戏 · ${m.type.name} (${m.i + 1}/${m.total}) </div>
     <div class="qhint">${m.type.tip} 每答对一题 +${miniReward()} 🐟</div>${q.prompt}<div class="opts">`;
   q.opts.forEach((o, i) => {
@@ -2916,5 +2927,5 @@ setState('menu');
 requestAnimationFrame(frame);
 
 // 调试接口
-window.__cat = { get G() { return G; }, get L() { return L; }, get state() { return state; }, get exam() { return exam; }, set auto(v) { touchMode = v; }, update, startLevel, applyBuff, levelClear, rateLevel, weaponStats, mergeAll, ilv, spawnEnemy, useShockwave, triggerRedRage, openReviveExam, showUnlock };
+window.__cat = { get G() { return G; }, get L() { return L; }, get state() { return state; }, get exam() { return exam; }, set auto(v) { touchMode = v; }, update, startLevel, applyBuff, levelClear, rateLevel, weaponStats, mergeAll, ilv, spawnEnemy, useShockwave, triggerRedRage, openReviveExam, showUnlock, makeMiniQuestion, makeExamQuestion, openQuiz, openMini, get mini() { return mini; }, get quiz() { return quiz; } };
 })();
