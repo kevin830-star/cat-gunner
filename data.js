@@ -11,17 +11,19 @@ const GRADE_LEVELS = [
 
 // ---------- 武器 ----------
 // cost：购买一把 D 级的价格；splash：[从第几阶开始, 起始半径, 每阶增加] 命中后的溅射范围
+// 武器价格：豌豆手枪 80、毛线散弹枪 120、鱼骨冲锋枪 160、罐头榴弹炮 200、激光逗猫笔 240；
+// 每把武器的攻击力（每秒伤害）跟价格成正比。
 const WEAPONS = [
-  { id: 'pistol', name: '豌豆手枪', py: 'wāndòu shǒuqiāng', desc: '可靠的基础武器，命中时炸开豌豆汁。C 级起有溅射。', cost: 30,
+  { id: 'pistol', name: '豌豆手枪', py: 'wāndòu shǒuqiāng', desc: '可靠的基础武器，命中时炸开豌豆汁。C 级起有溅射。', cost: 80,
     dmg: 14, interval: 0.36, speed: 560, count: 1, spread: 0, jitter: 0.03, pierce: 0, explode: 0, life: 0.9, r: 5, color: '#6fd24a', splash: [1, 26, 9] },
-  { id: 'shotgun', name: '毛线散弹枪', py: 'máoxiàn sǎndànqiāng', desc: '打出一扇毛线球，每升一阶多一颗，覆盖更广。B 级起有溅射。', cost: 90,
-    dmg: 9, interval: 0.75, speed: 480, count: 5, spread: 0.55, jitter: 0, pierce: 0, explode: 0, life: 0.45, r: 6, color: '#ff8fb1', splash: [2, 24, 8] },
+  { id: 'shotgun', name: '毛线散弹枪', py: 'máoxiàn sǎndànqiāng', desc: '打出一扇毛线球，每升一阶多一颗，覆盖更广。B 级起有溅射。', cost: 120,
+    dmg: 8.75, interval: 0.75, speed: 480, count: 5, spread: 0.55, jitter: 0, pierce: 0, explode: 0, life: 0.45, r: 6, color: '#ff8fb1', splash: [2, 24, 8] },
   { id: 'smg', name: '鱼骨冲锋枪', py: 'yúgǔ chōngfēngqiāng', desc: '射速非常快，单发伤害低。A 级起有溅射。', cost: 160,
-    dmg: 7, interval: 0.11, speed: 640, count: 1, spread: 0, jitter: 0.12, pierce: 0, explode: 0, life: 0.75, r: 4, color: '#f4f4f4', splash: [3, 20, 8] },
-  { id: 'grenade', name: '罐头榴弹炮', py: 'guàntou liúdànpào', desc: '罐头落地爆炸，范围随品级变大。', cost: 260,
-    dmg: 42, interval: 1.0, speed: 380, count: 1, spread: 0, jitter: 0.02, pierce: 0, explode: 85, life: 0.85, r: 8, color: '#c9a35a' },
-  { id: 'laser', name: '激光逗猫笔', py: 'jīguāng dòumāobǐ', desc: '激光穿透一整排敌人，品级越高光束越粗。', cost: 380,
-    dmg: 22, interval: 0.5, speed: 950, count: 1, spread: 0, jitter: 0, pierce: 99, explode: 0, life: 0.6, r: 5, color: '#ff4040' },
+    dmg: 8.56, interval: 0.11, speed: 640, count: 1, spread: 0, jitter: 0.12, pierce: 0, explode: 0, life: 0.75, r: 4, color: '#f4f4f4', splash: [3, 20, 8] },
+  { id: 'grenade', name: '罐头榴弹炮', py: 'guàntou liúdànpào', desc: '罐头落地爆炸，范围随品级变大。', cost: 200,
+    dmg: 97.22, interval: 1.0, speed: 380, count: 1, spread: 0, jitter: 0.02, pierce: 0, explode: 85, life: 0.85, r: 8, color: '#c9a35a' },
+  { id: 'laser', name: '激光逗猫笔', py: 'jīguāng dòumāobǐ', desc: '激光穿透一整排敌人，品级越高光束越粗。', cost: 240,
+    dmg: 58.33, interval: 0.5, speed: 950, count: 1, spread: 0, jitter: 0, pierce: 99, explode: 0, life: 0.6, r: 5, color: '#ff4040' },
 ];
 
 // ---------- 品级与合成 ----------
@@ -44,7 +46,7 @@ const MERGE_NEED = [2, 2, 2, 3, 3];
 const ITEMS = [
   { id: 'catnip', name: '猫薄荷', py: 'māo bòhe', desc: '永久拥有。手动使用（空格键或按钮）：一段时间内移动和射击都变快，效果结束后冷却一会儿可以再用。', manual: true, key: '空格', cost: 45, max: 5,
     cool: lv => 22 - 2 * lv, eff: lv => `持续 ${5 + 2 * lv} 秒 · 冷却 ${22 - 2 * lv} 秒` },
-  { id: 'turret', name: '自动炮塔', py: 'zìdòng pàotǎ', desc: '永久拥有，在猫窝旁自动射击。每买一座多一座（最多 4 座）；合成升级让所有炮塔更强。', multi: 4, unit: '座', cost: 70, max: 5,
+  { id: 'turret', name: '自动炮塔', py: 'zìdòng pàotǎ', desc: '永久拥有，在猫窝旁自动射击。每买一座多一座（最多 4 座）；合成升级让所有炮塔更强。', multi: 4, unit: '座', cost: 300, max: 5,
     eff: lv => lv === 1 ? '基础强度' : `伤害 +${35 * (lv - 1)}%，射速 +${Math.round(100 / (1 - 0.08 * (lv - 1)) - 100)}%` },
   { id: 'shockwave', name: '冲击波', py: 'chōngjībō', desc: '永久拥有。手动使用（F 键或按钮）：全屏敌人被震晕并震退五格，同时震碎敌方弹幕；用后冷却一会儿可以再用。', manual: true, key: 'F', cost: 300, max: 5,
     cool: lv => 32 - 3 * lv, eff: lv => `眩晕 ${(1.2 + 0.4 * (lv - 1)).toFixed(1)} 秒 · 冷却 ${32 - 3 * lv} 秒${lv > 1 ? ` · 伤害 +${35 * (lv - 1)}%` : ''}` },

@@ -1446,7 +1446,7 @@ function renderQuiz(chosen) {
   const zhq = bKey === 'idiom' || bKey === 'poem';
   const sent = (bKey === 'idiom' ? idiomText(q) : q.s).replace('____', `<span class="blank">${answered ? ans : '&nbsp;'}</span>`);
   let h = `<div class="qbadge">📚 ${qType} · ${gName}</div>
-    <div class="qtitle">⚠️ ${title} 答对问题：攻击力 +50% 并触发 5 秒金光觉醒！</div>
+    <div class="qtitle">⚠️ ${title} 答对问题：攻击力 +25% 并触发 5 秒金光觉醒！</div>
     <div class="qsent">${sent}</div>${zhq ? `<div class="qhint">${bKey === 'idiom' ? '意思：' : ''}${zhOf(q, bKey)}</div>` : ''}<div class="opts">`;
   opts.forEach((o, i) => {
     let cls = 'opt';
@@ -1458,7 +1458,7 @@ function renderQuiz(chosen) {
     const ok = opts[chosen].ok;
     const cleanSent = q.s.replace('____', ans).replace(/（.*?）/g, '');
     h += `<div class="qfb">
-      <div class="res ${ok ? 'ok' : 'no'}">${ok ? '答对了！攻击力 +50% · 准备金光觉醒！' : '答错了，正确答案是「' + ans + '」'}</div>
+      <div class="res ${ok ? 'ok' : 'no'}">${ok ? '答对了！攻击力 +25% · 准备金光觉醒！' : '答错了，正确答案是「' + ans + '」'}</div>
       <div class="full">${q.s.replace('____', ans)}<button class="speak" data-action="speak" data-t="${cleanSent}">🔊</button></div>
       <div>${q.py}</div>${zhq ? '' : `<div>${q.en}</div>`}
       <button class="big" data-action="quizDone">${ok ? '🔥 觉醒并继续战斗' : '继续战斗'}</button>`;
@@ -1470,7 +1470,7 @@ function answerQuiz(i) {
   quiz.answered = true;
   const ok = quiz.opts[i].ok;
   quiz.correct = ok;
-  if (ok) { L.atkBuff += 0.5; sfx.right(); } else sfx.wrong();
+  if (ok) { L.atkBuff += 0.25; sfx.right(); } else sfx.wrong();
   renderQuiz(i);
   const cleanSent = quiz.q.s.replace('____', quiz.q.opts[0].split('|')[0]).replace(/（.*?）/g, '');
   speak(cleanSent);
@@ -1849,14 +1849,14 @@ function renderShop() {
     h += `<div class="wcell t${o.tier}${eqd ? ' equipped' : ''}" style="--tc:${TIERS[o.tier].color}">
       <div class="top"><img class="wi" src="${ICONS.url[o.id]}" alt=""><div style="text-align:right">${tierBadge(o.tier)}<div class="cnt">×${o.n}</div></div></div>
       <div class="wn">${w.name}</div>
-      <div class="ws">伤害 ${Math.round(s.dmg)}${s.count > 1 ? '×' + s.count : ''} · 射速 ${(1 / s.interval).toFixed(1)}/秒<br>${s.area}</div>
+      <div class="ws">攻击力 ${Math.round(s.dps)}/秒 · 伤害 ${Math.round(s.dmg)}${s.count > 1 ? '×' + s.count : ''} · 射速 ${(1 / s.interval).toFixed(1)}/秒<br>${s.area}</div>
       <div class="row">${btn('eqW', key, eqd ? '使用中' : '装备', !eqd)}${top ? '' : `<button class="merge" data-action="mergeW" data-id="${key}" ${o.n >= need ? '' : 'disabled'}>合成 ${o.n}/${need}</button>`}</div></div>`;
   }
   h += '</div><h3>购买武器（D 级）</h3><div class="cards">';
   for (const w of WEAPONS) {
     const s = weaponStats(w.id, 0), have = G.inv[w.id].reduce((a, b) => a + b, 0);
     h += card({ icon: w.id, name: w.name, py: w.py, desc: w.desc,
-      lv: `D 级 伤害 ${Math.round(s.dmg)}${s.count > 1 ? '×' + s.count : ''} ${s.area}${have ? ` · 已有 ${have} 把` : ''}`,
+      lv: `D 级 攻击力 ${Math.round(s.dps)}/秒 · 伤害 ${Math.round(s.dmg)}${s.count > 1 ? '×' + s.count : ''} ${s.area}${have ? ` · 已有 ${have} 把` : ''}`,
       btns: btn('buyW', w.id, `购买 ${w.cost} 🐟`, fish >= w.cost) });
   }
   h += '</div>';
@@ -2944,5 +2944,5 @@ setState('menu');
 requestAnimationFrame(frame);
 
 // 调试接口
-window.__cat = { get G() { return G; }, get L() { return L; }, get state() { return state; }, get exam() { return exam; }, set auto(v) { touchMode = v; }, update, startLevel, applyBuff, levelClear, rateLevel, weaponStats, mergeAll, ilv, spawnEnemy, useShockwave, triggerRedRage, openReviveExam, showUnlock, makeMiniQuestion, shopAction, makeExamQuestion, openQuiz, openMini, get mini() { return mini; }, get quiz() { return quiz; } };
+window.__cat = { get G() { return G; }, get L() { return L; }, get state() { return state; }, get exam() { return exam; }, set auto(v) { touchMode = v; }, update, startLevel, applyBuff, levelClear, rateLevel, weaponStats, mergeAll, ilv, spawnEnemy, useShockwave, triggerRedRage, openReviveExam, showUnlock, makeMiniQuestion, shopAction, openShop, makeExamQuestion, openQuiz, openMini, get mini() { return mini; }, get quiz() { return quiz; } };
 })();
