@@ -1,4 +1,4 @@
-// 猫咪保卫战 —— 主程序
+// 猫咪保卫战 — 主程序
 (() => {
 'use strict';
 
@@ -14,8 +14,6 @@ const shuffle = arr => {
   for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; }
   return a;
 };
-// 抽题袋：抽完一轮才会重复
-const makeBag = list => { let bag = []; return () => { if (!bag.length) bag = shuffle(list); return bag.pop(); }; };
 
 const canvas = $('game');
 let ctx = canvas.getContext('2d');
@@ -24,13 +22,36 @@ const NEST = { x: WORLD.w / 2, y: WORLD.h / 2, r: 46 };
 const FENCE_R = 150;
 const BOSS_EVERY = 3;
 const LEVEL_TIME = 60;
+const GRID_SIZE = 100; // 地面方格每格 100 像素
+const SHOCKWAVE_PUSH = GRID_SIZE * 5; // 冲击波震退五格 = 500 像素
 
 // ---------- 存档与设置 ----------
-const store = { best: 0, pinyin: true, mute: false };
+const store = { best: 0, pinyin: true, mute: false, grade: 0 };
 try { Object.assign(store, JSON.parse(localStorage.getItem('catDefense') || '{}')); } catch (e) { /* 无存档 */ }
+if (![0, 1, 2, 3].includes(store.grade)) store.grade = 0;
 const save = () => { try { localStorage.setItem('catDefense', JSON.stringify(store)); } catch (e) { /* 忽略 */ } };
 
-// ---------- 声音 ----------（合成器在 sound.js）
+// 分级抽题袋：支持按所选年级或随关卡自动进阶抽题
+const bags = {};
+function pickFromBank(bank, key) {
+  const g = store.grade;
+  const lv = G ? G.level : 1;
+  const targetFilter = item => {
+    if (!item.grade) return true;
+    if (g > 0) return item.grade === g;
+    if (lv <= 3) return item.grade === 1;
+    if (lv <= 8) return item.grade <= 2;
+    return true;
+  };
+  const bagKey = `${key}_${g}_${lv <= 3 ? 1 : lv <= 8 ? 2 : 3}`;
+  if (!bags[bagKey] || !bags[bagKey].length) {
+    const filtered = bank.filter(targetFilter);
+    bags[bagKey] = shuffle(filtered.length ? filtered : bank);
+  }
+  return bags[bagKey].pop();
+}
+
+// ---------- 声音 ---------- (合成器在 sound.js)
 SFX.setMuted(() => store.mute);
 const initAudio = () => SFX.init();
 const sfx = new Proxy({}, { get: (_, name) => () => SFX.play(name) });
@@ -44,7 +65,7 @@ function speak(text) {
 }
 
 // ---------- 画布与镜头 ----------
-let W = 0, H = 0, scale = 1;
+let W = 0, H = 0, scale = 1, camZoom = 1;
 const cam = { x: 0, y: 0 };
 function resize() {
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -77,9 +98,21 @@ window.addEventListener('keydown', e => {
     if (k === 'q') cycleWeapon(1);
     if (k === 'e') cycleWeapon(-1);
     if (k === ' ') { useCatnip(); e.preventDefault(); }
+    if (k === 'f') { useShockwave(); e.preventDefault(); }
     if (k >= '1' && k <= '5') { const w = WEAPONS[+k - 1], t = bestTier(w.id); if (t >= 0) { G.eq = { id: w.id, tier: t }; sfx.switch(); } }
     if (k === 'p' || k === 'escape') pauseGame();
-  } else if (state === 'paused' && (k === 'p' || k === 'escape')) resumeGame();
+  } else if (state === 'paused' && (k === 'p' || k === 'escape')) {
+    resumeGame();
+  } else if (state === 'quiz' && quiz) {
+    if (!quiz.answered && k >= '1' && k <= '4') answerQuiz(+k - 1);
+    else if (quiz.answered && (k === ' ' || k === 'enter')) { e.preventDefault(); finishQuiz(); }
+  } else if (state === 'mini' && mini) {
+    if (mini.chosen < 0 && k >= '1' && k <= '4') answerMini(+k - 1);
+    else if (mini.chosen >= 0 && (k === ' ' || k === 'enter')) { e.preventDefault(); nextMini(); }
+  } else if (state === 'exam' && exam && !exam.finished) {
+    if (exam.chosen < 0 && k >= '1' && k <= '4') answerExam(+k - 1);
+    else if (exam.chosen >= 0 && (k === ' ' || k === 'enter')) { e.preventDefault(); nextExam(); }
+  }
 });
 window.addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
 window.addEventListener('blur', () => { for (const k in keys) keys[k] = false; mouse.down = false; if (state === 'playing') pauseGame(); });
@@ -112,13 +145,12 @@ canvas.addEventListener('touchcancel', endTouch);
 
 $('btnPause').addEventListener('click', () => { if (state === 'playing') pauseGame(); });
 // 右下角的道具栏：用 pointerdown（按下即触发）。
-// 手机上一根手指按着屏幕控制移动时，另一根手指点按钮不会产生 click，所以不能用 click。
 const ibEls = {};
 (function buildItemBar() {
   const bar = $('itemBar');
   const mk = (id, html, cls = '') => { const b = document.createElement('button'); b.className = 'ib ' + cls; b.dataset.ib = id; b.innerHTML = html; bar.appendChild(b); ibEls[id] = { el: b, sig: null }; };
   mk('weapon', '<img alt=""><span class="tierb"></span><span class="key">Q</span>', 'wb');
-  for (const it of ITEMS) mk(it.id, `<img src="${ICONS.url[it.id]}" alt=""><span class="cd"></span><span class="ct"></span>${it.manual ? '<span class="key">空格</span>' : ''}${it.multi ? '<span class="num"></span>' : ''}`);
+  for (const it of ITEMS) mk(it.id, `<img src="${ICONS.url[it.id]}" alt=""><span class="cd"></span><span class="ct"></span>${it.manual ? `<span class="key">${it.key || '空格'}</span>` : ''}${it.multi ? '<span class="num"></span>' : ''}`);
   bar.addEventListener('pointerdown', e => {
     const b = e.target.closest('.ib');
     if (!b || state !== 'playing') return;
@@ -129,26 +161,27 @@ const ibEls = {};
 })();
 
 // ---------- 游戏状态 ----------
-let state = 'menu';   // menu | playing | paused | quiz | shop | mini | over
-let G = null;         // 整局数据
-let L = null;         // 当前关卡数据
-const nextFill = makeBag(FILL_QUIZ);
-const nextPic = makeBag(PIC_WORDS);
-const nextComp = makeBag(COMPONENTS);
-const nextTone = makeBag(PIC_WORDS.filter(w => w.c.length === 1));
+let state = 'menu';  // menu | playing | paused | quiz | exam | shop | mini | over | clear
+let G = null;        // 整局数据
+let L = null;        // 当前关卡数据
 
 const catMaxHp = () => 100 + 25 * G.stats.catHp;
 const catSpeed = () => 190 + 18 * G.stats.catSpd;
 const nestMaxHp = () => 300 + 100 * G.stats.nestHp;
 const weaponDef = id => WEAPONS.find(w => w.id === id);
 const itemDef = id => ITEMS.find(it => it.id === id);
+const itemIndex = id => ITEMS.findIndex(it => it.id === id);
+const isItemUnlocked = (id, r = G) => {
+  const idx = itemIndex(id);
+  return idx >= 0 && idx < (r ? r.unlockedItems : 0);
+};
 const tierColor = t => t >= 5 ? `hsl(${Math.floor(performance.now() / 6) % 360} 90% 58%)` : TIERS[t].color;
-const ilv = id => (L && L.on && L.on[id]) || 0;   // 本关生效中的道具强度（0 = 没有生效）
+const ilv = id => (L && L.on && L.on[id]) || 0;  // 本关生效中的道具强度（0 = 没有生效）
 const fenceSlow = () => 0.2 + 0.1 * ilv('fence');
 const itemUpCost = (it, lv) => Math.round(it.cost * 1.5 * lv);
 // 可以同时拥有多个的道具（炮塔、飞镖）：units 里每一项是一座/一枚还能用几关
 const itemLeft = id => itemDef(id).multi ? Math.max(0, ...G.items[id].units) : G.items[id].uses;
-const itemPow = id => 1 + 0.35 * (G.items[id].lv - 1);   // 升级带来的伤害倍数
+const itemPow = id => 1 + 0.35 * (G.items[id].lv - 1);  // 升级带来的伤害倍数
 const tierBadge = (t, cls = '') => `<span class="tier t${t} ${cls}" style="--tc:${TIERS[t].color}">${TIERS[t].id}</span>`;
 
 // 某把武器在某个品级下的实际数值
@@ -159,7 +192,7 @@ function weaponStats(id, tier) {
     count: w.count + (id === 'shotgun' ? tier : 0), spread: w.spread + (id === 'shotgun' ? tier * 0.05 : 0),
     explode: w.explode ? w.explode + 14 * tier : 0, splash: 0, r: w.r + (id === 'laser' ? tier * 1.6 : 0),
   };
-  if (id === 'shotgun') s.dmg *= w.count / s.count;   // 弹丸多了，但总伤害只按品级增长
+  if (id === 'shotgun') s.dmg *= w.count / s.count;  // 弹丸多了，但总伤害只按品级增长
   if (w.splash && tier >= w.splash[0]) s.splash = w.splash[1] + w.splash[2] * (tier - w.splash[0]);
   s.dps = s.dmg * s.count / s.interval;
   s.area = s.explode ? `爆炸半径 ${s.explode}` : s.splash ? `溅射半径 ${s.splash}` : id === 'laser' ? '穿透整排' : id === 'shotgun' ? `扇形 ${Math.round(s.spread * 57.3)}°` : '单体';
@@ -177,7 +210,7 @@ function ownedList(r = G) {
 function fixEquip(r = G) {
   if (r.eq && r.inv[r.eq.id] && r.inv[r.eq.id][r.eq.tier] > 0) return;
   const own = ownedList(r);
-  if (!own.length) { r.inv.pistol[0] = 1; r.eq = { id: 'pistol', tier: 0 }; return; }   // 保底：至少有一把枪
+  if (!own.length) { r.inv.pistol[0] = 1; r.eq = { id: 'pistol', tier: 0 }; return; }  // 保底：至少有一把枪
   const best = own.reduce((a, b) => weaponStats(b.id, b.tier).dps > weaponStats(a.id, a.tier).dps ? b : a);
   r.eq = { id: best.id, tier: best.tier };
 }
@@ -216,6 +249,8 @@ const freshRun = () => {
     level: 1, fish: 0, kills: 0,
     inv, eq: { id: 'pistol', tier: 0 },
     items: Object.fromEntries(ITEMS.map(it => [it.id, it.multi ? { uses: 0, lv: 1, units: [] } : { uses: 0, lv: 1 }])),
+    unlockedItems: 0, // 游戏开始时没有解锁任何道具，每击败一个头目解锁一个
+    pendingUnlock: null,
     stats: { catHp: 0, catSpd: 0, nestHp: 0 },
     nestHp: 300, miniPlayed: false, lastBonus: 0, seen: {}, stars: {}, lastStars: 0, lastStarBonus: 0, lastCatLoss: 0, lastNestLoss: 0,
   };
@@ -232,7 +267,9 @@ function loadRun() {
     const run = freshRun();
     for (const k of ['level', 'fish', 'kills', 'nestHp', 'lastBonus', 'lastStars', 'lastStarBonus', 'lastCatLoss', 'lastNestLoss']) if (Number.isFinite(d[k])) run[k] = d[k];
     run.miniPlayed = !!d.miniPlayed;
-    // 武器：新存档是 inv（每个品级的数量）；旧存档是 weapons（每把武器一个等级），转成对应品级
+    if (Number.isFinite(d.unlockedItems)) run.unlockedItems = clamp(Math.floor(d.unlockedItems), 0, ITEMS.length);
+    else run.unlockedItems = clamp(Math.floor(run.level / BOSS_EVERY), 0, ITEMS.length);
+    run.pendingUnlock = typeof d.pendingUnlock === 'string' ? d.pendingUnlock : null;
     run.inv = freshInv();
     if (d.inv) {
       for (const w of WEAPONS) for (let t = 0; t < TIERS.length; t++) { const n = d.inv[w.id] && d.inv[w.id][t]; if (n > 0) run.inv[w.id][t] = clamp(Math.floor(n), 0, 999); }
@@ -243,11 +280,9 @@ function loadRun() {
       : typeof d.cur === 'string' && run.inv[d.cur] ? { id: d.cur, tier: Math.max(bestTier(d.cur, run), 0) } : null;
     run.eq = eq || { id: 'pistol', tier: 0 };
     fixEquip(run);
-    // 道具：新存档是 {uses, lv}；旧存档是一个数字（永久拥有），转成 3 次使用次数
     for (const it of ITEMS) {
       const v = d.items && d.items[it.id];
       if (it.multi) {
-        // 旧存档里炮塔/飞镖的等级代表数量（等级 + 1），转成同样数量的炮塔/飞镖
         let units = [], lv = 1;
         if (v && Array.isArray(v.units)) { units = v.units.map(u => clamp(Math.floor(u) || 0, 0, ITEM_CAP)).filter(u => u > 0).slice(0, it.multi); lv = clamp(Math.floor(v.lv) || 1, 1, it.max); }
         else if (typeof v === 'number') { if (v > 0) units = Array(Math.min(it.multi, v + 1)).fill(3); }
@@ -283,32 +318,41 @@ function continueGame() {
 // 小头目出现的时间（秒）：第 2 关起每关都有，越往后越多
 function eliteSchedule(lv) {
   if (lv < 2) return [];
-  if (isBossLevel(lv)) return lv >= 18 ? [22, 44] : lv >= 9 ? [35] : [];
+  if (isBossLevel(lv)) return lv >= 18 ? [20, 40] : lv >= 9 ? [30] : [25];
   return lv >= 20 ? [8, 18, 28, 38, 48] : lv >= 14 ? [12, 24, 36, 48] : lv >= 8 ? [15, 30, 45] : lv >= 5 ? [18, 40] : [22];
 }
 // 敌人潮：第 8 关起，关卡中途会有一大群敌人从同一个方向涌来
 function hordeSchedule(lv) {
   if (lv < 8) return [];
-  if (isBossLevel(lv)) return [38];
+  if (isBossLevel(lv)) return [36];
   return lv >= 16 ? [14, 30, 46] : lv >= 12 ? [20, 40] : [28];
 }
 
 function startLevel() {
+  const fullCatHp = catMaxHp();
   L = {
     time: LEVEL_TIME, elapsed: 0, spawnT: 1.2,
-    cat: { x: NEST.x, y: NEST.y + 95, r: 17, hp: catMaxHp(), cd: 0, inv: 0, aim: 0, walk: 0, moving: false, kx: 0, ky: 0, s: 1 },
+    // 每个关卡开始，猫的生命值回满
+    cat: { x: NEST.x, y: NEST.y + 95, r: 17, hp: fullCatHp, cd: 0, inv: 0, aim: 0, walk: 0, moving: false, kx: 0, ky: 0, s: 1 },
     enemies: [], bullets: [], ebullets: [], fish: [], parts: [], texts: [], turrets: [],
-    atkBuff: 0, catnipT: 0, catLost: 0, nestLost: 0, catMax: catMaxHp(), nestMax: nestMaxHp(), on: {}, starSnd: 3,
+    atkBuff: 0, catnipT: 0, shockwaveCd: 0, redRageT: 0, reviveUsed: false,
+    catLost: 0, nestLost: 0, catMax: fullCatHp, nestMax: nestMaxHp(), on: {}, starsSnd: 3,
     boss: null, bossSpawned: false, bossHalfAsked: false, isBoss: isBossLevel(G.level),
     shake: 0, banner: 2.2, nestFlash: 0,
     drops: [], buffT: Object.fromEntries(BUFFS.filter(b => b.dur).map(b => [b.id, 0])),
     rings: [], bolts: [], helpers: [], trail: [], shAngle: 0, stormCd: 2, morphT: 0, stompT: 0, trailT: 0, form: null,
     eliteTimes: eliteSchedule(G.level), hordeTimes: hordeSchedule(G.level), notice: null, clearT: 0, fireworkT: 0,
   };
-  // 道具：每关开始时消耗 1 次使用次数，用完就不再生效
-  for (const it of ITEMS) {
+  camZoom = 1;
+  // 开局满血视觉反馈
+  ring(L.cat.x, L.cat.y, 65, '#7ed957', 0.55);
+  addText(L.cat.x, L.cat.y - 34, `猫咪生命已回满 (${fullCatHp})`, '#9cff6b', 15, 1.4);
+
+  // 道具：每关开始时消耗 1 次使用次数（仅限已解锁道具）
+  for (let idx = 0; idx < G.unlockedItems; idx++) {
+    const it = ITEMS[idx];
     const st = G.items[it.id];
-    if (it.multi) {   // 每座炮塔/每枚飞镖各用掉 1 关
+    if (it.multi) {
       if (!Array.isArray(st.units)) { st.units = st.uses > 0 ? Array(Math.min(it.multi, (st.lv || 1) + 1)).fill(st.uses) : []; st.uses = 0; st.lv = 1; }
       if (st.units.length) { L.on[it.id] = st.units.length; st.units = st.units.map(u => u - 1).filter(u => u > 0); }
     } else if (!it.manual && st.uses > 0) { st.uses--; L.on[it.id] = st.lv; }
@@ -334,15 +378,22 @@ function cycleWeapon(dir) {
   addText(L.cat.x, L.cat.y - 34, `${weaponDef(nx.id).name} ${TIERS[nx.tier].id}`, tierColor(nx.tier), 15);
   sfx.switch();
 }
-function toast(text) { L.toast = { text, t: 2 }; }
-// 点道具栏上的按钮：换枪、使用猫薄荷；其他道具是每关自动生效的，点一下只给出说明
+function toast(text) { if (L) L.toast = { text, t: 2 }; }
+
+// 点道具栏上的按钮：换枪、冲击波、猫薄荷；其他道具是每关自动生效的
 function pressItem(id) {
   if (id === 'weapon') {
     if (ownedList().length < 2) return toast('只有一把武器，去商店买新的或合成');
     return cycleWeapon(1);
   }
+  if (!isItemUnlocked(id)) return toast('击败头目后解锁该道具');
   const it = itemDef(id), st = G.items[id];
-  if (it.manual) {
+  if (id === 'shockwave') {
+    if (L.shockwaveCd > 0) return;
+    if (st.uses <= 0) return toast(`${it.name}用完了，去商店购买（300 🐟/个）`);
+    return useShockwave();
+  }
+  if (id === 'catnip') {
     if (L.catnipT > 0) return;
     if (st.uses <= 0) return toast(`${it.name}用完了，去商店补充`);
     return useCatnip();
@@ -350,12 +401,70 @@ function pressItem(id) {
   if (it.multi) return toast(st.units.length ? `${it.name} ${ilv(id)} ${it.unit}生效中，下一关还剩 ${st.units.length} ${it.unit}` : `${it.name}本关是最后一次，去商店补充`);
   toast(st.uses > 0 ? `${it.name}已自动生效，还剩 ${st.uses} 次（每关用 1 次）` : `${it.name}本关生效，已是最后一次，去商店补充`);
 }
+
 function useCatnip() {
+  if (!isItemUnlocked('catnip')) return;
   const st = G.items.catnip;
   if (st.uses <= 0 || L.catnipT > 0) return;
   st.uses--; L.catnipT = 5 + 2 * st.lv;
   addText(L.cat.x, L.cat.y - 34, '猫薄荷！', '#9cff6b', 18);
   sfx.catnip();
+}
+
+// 新道具：冲击波（价格 300 一个，使用后全屏敌人被震，后退五格 = 500 像素）
+function useShockwave() {
+  if (!isItemUnlocked('shockwave')) return;
+  const st = G.items.shockwave;
+  if (st.uses <= 0 || L.shockwaveCd > 0) return;
+  st.uses--;
+  L.shockwaveCd = 0.9;
+  const c = L.cat;
+  L.shake = 0.65;
+  sfx.shockwave();
+  // 全屏多层冲击波气浪环
+  ring(c.x, c.y, 960, '#4fc3ff', 0.65, true);
+  ring(c.x, c.y, 680, '#ffe066', 0.5, false);
+  ring(c.x, c.y, 420, '#ffffff', 0.35, false);
+  burst(c.x, c.y, '#4fc3ff', 28, 340);
+  burst(c.x, c.y, '#ffe066', 18, 260);
+  addText(c.x, c.y - 44, '💥 冲击波！全屏震退五格！', '#4fc3ff', 21, 1.5);
+  // 震碎场上所有敌方子弹
+  L.ebullets = [];
+  const stunDur = 1.2 + 0.4 * (st.lv - 1);
+  const shockDmg = (35 + 8 * G.level) * itemPow('shockwave');
+  for (const e of L.enemies) {
+    if (e.dead) continue;
+    // 计算从猫咪指向敌人的击退方向，若重合则背离猫窝
+    let dx = e.x - c.x, dy = e.y - c.y, d = Math.hypot(dx, dy);
+    if (d < 1) { dx = e.x - NEST.x; dy = e.y - NEST.y; d = Math.hypot(dx, dy) || 1; }
+    const a = Math.atan2(dy, dx);
+    // 后退五格（5 * 100 = 500 像素），通过平滑高速击退位移实现
+    e.shockDist = SHOCKWAVE_PUSH;
+    e.shockAngle = a;
+    e.stunT = Math.max(e.stunT || 0, stunDur);
+    e.flash = 0.35;
+    if (e.mode === 'wind' || e.mode === 'charge') { e.mode = 'rest'; e.mt = 1.0; }
+    if (e.type === 'boss' && (e.st === 'wind' || e.st === 'act')) bossState(e, 'rest', 0.8);
+    burst(e.x, e.y, '#9be7ff', 6, 150);
+    addText(e.x, e.y - e.r - 16, '震退!', '#8fd0ff', 14, 0.9);
+    damageEnemy(e, shockDmg);
+  }
+}
+
+// 答对头目中文题后触发：慢镜头特写，全身变大变红，周身金光上升，维持 5 秒钟
+function triggerRedRage() {
+  if (!L) return;
+  const c = L.cat;
+  L.redRageT = 5.0; // 严格维持 5 秒真实时间
+  L.morphT = 0.45;
+  L.shake = 0.45;
+  c.inv = Math.max(c.inv, 5.0);
+  ring(c.x, c.y, 160, '#ffd84a', 0.65, true);
+  ring(c.x, c.y, 95, '#ffe066', 0.45);
+  burst(c.x, c.y, '#ff2424', 32, 280);
+  burst(c.x, c.y, '#ffb347', 18, 200);
+  addText(c.x, c.y - 52, '✨ 答对觉醒！金光巨化 5 秒！', '#ffe066', 20, 2.2);
+  sfx.redPowerup();
 }
 
 // ---------- 效果 ----------
@@ -368,19 +477,16 @@ function burst(x, y, color, n = 6, speed = 120) {
 }
 
 // ---------- 敌人 ----------
-// 难度曲线：10 关之后血量增长加快，敌人也更快更疼
 const hpScale = lv => (1 + 0.12 * (lv - 1)) * (1 + 0.04 * Math.max(0, lv - 8));
 const dmgScale = lv => (1 + 0.08 * (lv - 1)) * (1 + 0.025 * Math.max(0, lv - 8));
 const speedScale = lv => Math.min(1.7, 1 + 0.03 * (lv - 1));
 const ENEMY_CAP = 110;
-// 敌人强度：关卡越高，强化（蓝）、精英（紫）、狂暴（红）的敌人越多
 function rollTier(lv) {
   const p1 = clamp((lv - 4) * 0.035, 0, 0.3), p2 = clamp((lv - 9) * 0.025, 0, 0.22), p3 = clamp((lv - 14) * 0.018, 0, 0.15);
   const r = Math.random();
   const t = r < p3 ? 3 : r < p3 + p2 ? 2 : r < p3 + p2 + p1 ? 1 : 0;
-  return L && L.boss ? Math.min(t, 1) : t;   // 头目在场时不出现紫色、红色的高档敌人，让头目战保持清晰
+  return L && L.boss ? Math.min(t, 1) : t;
 }
-// 一部分原本打猫窝的敌人会改去追猫；关卡越高、强度越高，追猫的越多
 const huntChance = (lv, tier) => lv >= 8 ? clamp(0.02 * (lv - 7) + 0.08 * tier, 0, 0.4) : 0;
 const edgePos = (side, along) => side === 0 ? { x: along, y: -20 } : side === 1 ? { x: along, y: WORLD.h + 20 } : side === 2 ? { x: -20, y: along } : { x: WORLD.w + 20, y: along };
 
@@ -396,10 +502,12 @@ function spawnEnemy(type, pos, tierArg) {
   const tier = special ? 0 : tierArg !== undefined ? tierArg : rollTier(lv), T = ETIERS[tier];
   let hp = d.hp * hpScale(lv) * T.hp;
   const kind = type === 'boss' ? bossFor(lv) : null;
+  // 头目血量翻倍（BOSS_HP_MULT = 3.0，为原版 1.5 的两倍）
   if (kind) hp = d.hp * kind.hp * (1 + 0.7 * (lv / BOSS_EVERY - 1)) * BOSS_HP_MULT;
   const e = {
     type, tier, x, y, r: d.r * T.size, hp, maxHp: hp, spd: d.spd * speedScale(lv) * T.spd * rand(0.92, 1.08),
     dmg: d.dmg * (special ? 1 + 0.08 * (lv - 1) : dmgScale(lv)) * T.dmg, cd: rand(0.3, 1), cd2: 0, flash: 0, face: 1, t: rand(0, 10), seed: rand(0, 6.28), summon: 4, dead: false,
+    stunT: 0, shockDist: 0, shockAngle: 0,
     hunter: d.target === 'cat' || (d.target === 'nest' && !special && Math.random() < huntChance(lv, tier)),
   };
   if (kind) Object.assign(e, { kind, r: kind.r, spd: kind.spd, st: 'walk', stT: 0, stDur: 1, spCd: 3, atkAnim: 0, z: 0, dir: 0, walking: true, meteors: [], sub: '', atk: 0, tick: 0 });
@@ -407,13 +515,12 @@ function spawnEnemy(type, pos, tierArg) {
   if (!special) announceEnemy(type, tier);
   return e;
 }
-// 第一次遇到新敌人，或第一次遇到更强的敌人时，在屏幕上提示一下
 function announceEnemy(type, tier) {
   if (L.notice) return;
   const d = ENEMIES[type];
   if (!G.seen[type] && d.tip) {
     G.seen[type] = 1;
-    L.notice = { text: `新敌人：${d.name}${store.pinyin && d.py ? '（' + d.py + '）' : ''}　${d.tip}`, t: 4.2, color: '#ffe066' };
+    L.notice = { text: `新敌人：${d.name}${store.pinyin && d.py ? ' (' + d.py + ') ' : ''} ${d.tip}`, t: 4.2, color: '#ffe066' };
   } else if (tier > 0 && !G.seen.tiers) {
     G.seen.tiers = 1;
     L.notice = { text: '个头越大、颜色越深越强：蓝·强化 → 紫·精英 → 红·狂暴', t: 4.2, color: '#ffe066' };
@@ -422,8 +529,7 @@ function announceEnemy(type, tier) {
 
 // ---------- 头目行为 ----------
 const BOSS_ANIMALS = BOSSES.filter(b => b.id !== 'dragon');
-const BOSS_HP_MULT = 1.5;
-// 每 5 个头目里的第 5 个是巨龙（第 15、30 关……），其余按顺序轮流出场
+const BOSS_HP_MULT = 3.0; // 头目血量翻倍（原为 1.5，现翻倍为 3.0）
 function bossFor(lv) {
   const n = Math.max(1, Math.floor(lv / BOSS_EVERY));
   if (n % 5 === 0) return BOSSES.find(b => b.id === 'dragon');
@@ -435,7 +541,7 @@ function ring(x, y, max, color, life = 0.5, fill = false) { L.rings.push({ x, y,
 function bossState(e, st, t) { e.st = st; e.stT = t; e.stDur = t || 1; }
 function knockCat(from, power) {
   const c = L.cat;
-  if (L.buffT.giant > 0) return;
+  if (L.buffT.giant > 0 || L.redRageT > 0) return;
   const a = Math.atan2(c.y - from.y, c.x - from.x);
   c.kx = Math.cos(a) * power; c.ky = Math.sin(a) * power;
 }
@@ -451,7 +557,7 @@ function updateBoss(e, dt, c) {
     const dx = NEST.x - e.x, dy = NEST.y - e.y, dd = Math.hypot(dx, dy) || 1, stop = NEST.r + e.r - 6;
     e.walking = dd > stop;
     if (e.walking) { e.x += dx / dd * spd * dt; e.y += dy / dd * spd * dt; if (Math.abs(dx) > 2) e.face = dx < 0 ? -1 : 1; }
-    else if (e.cd <= 0) { e.cd = 1.3; e.atkAnim = 0.4; hurtNest(e.dmg); }   // 咬猫窝
+    else if (e.cd <= 0) { e.cd = 1.3; e.atkAnim = 0.4; hurtNest(e.dmg); }
     if (e.cd2 <= 0 && dCat < c.r + e.r - 6) { e.cd2 = 0.8; e.atkAnim = 0.4; hurtCat(e.dmg); }
     e.spCd -= dt;
     const inRange = sp === 'stomp' ? (dist(e, NEST) < 250 || dCat < 210) : dCat < (BOSS_RANGE[sp] || 1e9);
@@ -466,7 +572,6 @@ function updateBoss(e, dt, c) {
   e.walking = false;
   e.stT -= dt;
   if (e.st === 'wind') {
-    // 冲撞类攻击在蓄力前半段会继续瞄准猫咪，之后方向锁定，给玩家躲开的时间
     if ((sp === 'charge' && e.stT > 0.35) || (sp === 'dash' && e.stT > 0.2)) { e.dir = Math.atan2(c.y - e.y, c.x - e.x); faceDir(e); }
     if (e.stT <= 0) bossAct(e, c);
   } else if (e.st === 'act') {
@@ -490,10 +595,11 @@ function updateBoss(e, dt, c) {
       }
     }
   } else if (e.stT <= 0) {
-    e.spCd = k.cd * (e.hp < e.maxHp / 2 ? 0.7 : 1);   // 血量过半后更暴躁
+    e.spCd = k.cd * (e.hp < e.maxHp / 2 ? 0.7 : 1);
     bossState(e, 'walk', 0);
   }
 }
+
 // ---------- 巨龙：喷火扫射 + 陨石雨 ----------
 const dragonMouth = e => ({ x: e.x + e.face * e.r * 0.9, y: e.y - e.z * 0.7 - e.r * 0.25 });
 const BREATH_LEN = 440, BREATH_HALF = 0.3;
@@ -502,12 +608,11 @@ function inCone(o, a, p, pad = 0) {
   if (d > BREATH_LEN + pad) return false;
   let da = Math.atan2(p.y - o.y, p.x - o.x) - a;
   da = Math.atan2(Math.sin(da), Math.cos(da));
-  return Math.abs(da) < BREATH_HALF + Math.atan2(pad, Math.max(d, 1));   // 目标有体积，近处角度放宽一点
+  return Math.abs(da) < BREATH_HALF + Math.atan2(pad, Math.max(d, 1));
 }
 function updateDragon(e, dt, c) {
   const k = e.kind;
   e.z = 22 + Math.sin(e.t * 3) * 6;
-  // 陨石：不管龙当前在做什么都继续下落，落地时炸开
   for (const m of e.meteors) {
     m.t += dt;
     if (!m.done && m.t >= m.delay) {
@@ -525,7 +630,7 @@ function updateDragon(e, dt, c) {
     e.walking = true;
     const dx = NEST.x - e.x, dy = NEST.y - e.y, dd = Math.hypot(dx, dy) || 1;
     if (dd > 250) { e.x += dx / dd * e.spd * dt; e.y += dy / dd * e.spd * dt; }
-    else { const a = Math.atan2(e.y - NEST.y, e.x - NEST.x) + dt * 0.22; e.x = NEST.x + Math.cos(a) * dd; e.y = NEST.y + Math.sin(a) * dd; }   // 绕着猫窝盘旋
+    else { const a = Math.atan2(e.y - NEST.y, e.x - NEST.x) + dt * 0.22; e.x = NEST.x + Math.cos(a) * dd; e.y = NEST.y + Math.sin(a) * dd; }
     e.face = c.x < e.x ? -1 : 1;
     if (e.cd2 <= 0 && dCat < c.r + e.r * 0.85) { e.cd2 = 0.9; e.atkAnim = 0.4; hurtCat(e.dmg); knockCat(e, 320); }
     e.spCd -= dt;
@@ -551,7 +656,7 @@ function updateDragon(e, dt, c) {
   if (e.st === 'wind') {
     if (e.sub === 'breath') {
       const o = dragonMouth(e);
-      if (e.stT > 0.3) { e.dir = Math.atan2(c.y - o.y, c.x - o.x); e.face = Math.cos(e.dir) < 0 ? -1 : 1; }   // 最后 0.3 秒锁定方向
+      if (e.stT > 0.3) { e.dir = Math.atan2(c.y - o.y, c.x - o.x); e.face = Math.cos(e.dir) < 0 ? -1 : 1; }
     }
     if (e.stT <= 0) {
       if (e.sub === 'breath') { e.dir0 = e.dir; e.fire = e.dir; e.tick = 0; sfx.fireBreath(); bossState(e, 'act', 1.5); }
@@ -560,7 +665,7 @@ function updateDragon(e, dt, c) {
   } else if (e.st === 'act') {
     if (e.sub === 'breath') {
       const p = clamp(1 - e.stT / e.stDur, 0, 1), o = dragonMouth(e);
-      e.fire = e.dir0 + (p - 0.5) * 0.9;   // 火焰左右扫射
+      e.fire = e.dir0 + (p - 0.5) * 0.9;
       e.face = Math.cos(e.fire) < 0 ? -1 : 1;
       e.tick -= dt;
       if (e.tick <= 0) {
@@ -580,7 +685,6 @@ function updateDragon(e, dt, c) {
   }
 }
 
-// 野猪：先蓄力（地上出现红色预警），再沿直线冲撞
 function updateCharger(e, dt, c) {
   const dCat = dist(e, c);
   e.mode = e.mode || 'run';
@@ -594,7 +698,7 @@ function updateCharger(e, dt, c) {
     if (e.cd <= 0 && dCat < 380 && dCat > 90) { e.mode = 'wind'; e.mt = 0.7; e.dir = Math.atan2(dy, dx); sfx.boarWind(); }
   } else if (e.mode === 'wind') {
     e.mt -= dt;
-    if (e.mt > 0.25) e.dir = Math.atan2(c.y - e.y, c.x - e.x);   // 最后 0.25 秒锁定方向
+    if (e.mt > 0.25) e.dir = Math.atan2(c.y - e.y, c.x - e.x);
     e.face = Math.cos(e.dir) < 0 ? -1 : 1;
     if (e.mt <= 0) { e.mode = 'charge'; e.mt = 0.9; e.hit = false; sfx.dash(); }
   } else if (e.mode === 'charge') {
@@ -611,7 +715,6 @@ function updateCharger(e, dt, c) {
     if (e.mt <= 0) { e.mode = 'run'; e.cd = rand(2, 3.4); }
   }
 }
-// 医疗兔：定时给周围受伤的敌人回血
 function healTick(e, dt) {
   e.hc = (e.hc === undefined ? 1 : e.hc) - dt;
   if (e.hc > 0) return;
@@ -624,7 +727,6 @@ function healTick(e, dt) {
   }
   if (n) { ring(e.x, e.y, 150, '#7ed957', 0.5, true); sfx.heal(); }
 }
-// 自爆老鼠：碰到目标就爆炸，波及范围内的猫和猫窝
 function bomberBlast(e, c) {
   const R = 80 + 8 * e.tier;
   ring(e.x, e.y, R, '#ff6b3c', 0.45, true); ring(e.x, e.y, R * 0.55, '#fff7b0', 0.3);
@@ -665,11 +767,11 @@ function bossAct(e, c) {
     L.shake = 0.45;
     if (dist(e, c) < 290) { hurtCat(e.dmg * 0.6); knockCat(e, 620); }
     spawnEnemy('raccoon', around()); spawnEnemy('mouse', around()); spawnEnemy('mouse', around());
-    addText(e.x, e.y - e.r - 34, '吼————！', '#fff', 22, 1.2);
+    addText(e.x, e.y - e.r - 34, '吼——！', '#fff', 22, 1.2);
     bossState(e, 'rest', 0.5);
   } else if (sp === 'charge') { sfx.dash(); bossState(e, 'act', 1.1); }
 }
-// 按关卡和权重挑一种敌人；弱小的敌人随着关卡升高越来越少
+
 function pickType(lv) {
   const pool = Object.keys(ENEMIES).filter(k => ENEMIES[k].w && ENEMIES[k].from <= lv);
   const wt = k => ENEMIES[k].w * (ENEMIES[k].weak ? Math.max(0.2, 1 - 0.06 * Math.max(0, lv - 6)) : 1);
@@ -684,7 +786,6 @@ function spawnWave() {
   const first = spawnEnemy(type, undefined, tier);
   for (let i = 1; i < n; i++) spawnEnemy(type, { x: first.x + rand(-30, 30), y: first.y + rand(-30, 30) }, tier);
 }
-// 敌人潮：一大群敌人从同一个方向涌来
 function hordeBurst() {
   const lv = G.level, side = randInt(0, 3), n = Math.min(Math.floor((6 + lv * 0.7) * (L.boss ? 0.6 : 1)), Math.max(0, ENEMY_CAP - L.enemies.length));
   const mid = side < 2 ? rand(300, WORLD.w - 300) : rand(250, WORLD.h - 250);
@@ -711,13 +812,20 @@ function damageEnemy(e, dmg) {
       dropBuff(e.x - 30, e.y); dropBuff(e.x + 30, e.y);
       if (e.kind.id === 'dragon') dropBuff(e.x, e.y - 30);
       L.boss = null; L.shake = 0.5; sfx.boom();
+      // 每打败一个头目解锁一个新道具，并记录待播放解锁动画
+      if (G.unlockedItems < ITEMS.length) {
+        const unlocked = ITEMS[G.unlockedItems];
+        G.unlockedItems++;
+        G.pendingUnlock = unlocked.id;
+        addText(e.x, e.y - 54, `🎉 解锁新道具：${unlocked.name}！`, '#ffe066', 20, 2.2);
+        sfx.unlock();
+      }
     } else if (e.type === 'elite') {
       for (let i = 0; i < 4; i++) L.fish.push({ x: e.x + rand(-25, 25), y: e.y + rand(-25, 25), v: Math.ceil(n / 4) });
       dropBuff(e.x, e.y);
       L.shake = 0.3; sfx.boom();
     } else {
       L.fish.push({ x: e.x, y: e.y, v: n });
-      // 越强的敌人越容易掉增益
       if (Math.random() < BUFF_DROP_CHANCE + [0, 0.03, 0.14, 0.5][e.tier || 0]) dropBuff(e.x, e.y);
       if (d.splits && !e.small) splitSlime(e);
       if (e.tier >= 2) { burst(e.x, e.y, T.tint, 12, 200); L.shake = Math.max(L.shake, 0.12); }
@@ -725,7 +833,6 @@ function damageEnemy(e, dmg) {
     }
   }
 }
-// 软泥怪被打败后分裂成两只小的
 function splitSlime(e) {
   for (let i = 0; i < 2; i++) {
     const s = spawnEnemy('slime', { x: e.x + rand(-16, 16), y: e.y + rand(-16, 16) }, e.tier);
@@ -733,10 +840,10 @@ function splitSlime(e) {
   }
   burst(e.x, e.y, '#4fd6a8', 10, 150); sfx.slimeSplit();
 }
+
 // ---------- 增益掉落 ----------
 function dropBuff(x, y) {
   if (L.drops.length >= 6) return;
-  // 保底：猫的血量低于三分之一时，下一个增益一定是爱心
   const low = L.cat.hp < catMaxHp() / 3 && !L.drops.some(d => d.buff.id === 'heal');
   const b = low ? BUFFS.find(x => x.id === 'heal') : BUFFS[randInt(0, BUFFS.length - 1)];
   L.drops.push({ x: clamp(x, 30, WORLD.w - 30), y: clamp(y, 30, WORLD.h - 30), buff: b, life: 12, t: rand(0, 6) });
@@ -745,7 +852,6 @@ function applyBuff(b) {
   const c = L.cat;
   if (b.dur) {
     L.buffT[b.id] = b.dur;
-    // 变身！
     L.morphT = 0.4; L.shake = Math.max(L.shake, 0.25);
     ring(c.x, c.y, 120, b.color, 0.45); ring(c.x, c.y, 70, '#fff', 0.3);
   }
@@ -753,7 +859,7 @@ function applyBuff(b) {
   if (b.id === 'magnet') for (const f of L.fish) f.fly = true;
   if (b.id === 'freeze') for (const e of L.enemies) burst(e.x, e.y, '#c8f4ff', 3, 60);
   addText(c.x, c.y - 44, `${b.name}${store.pinyin ? ' ' + b.py : ''}`, b.color, 18, 1.6);
-  addText(c.x, c.y - 24, b.tip + '！', '#fff', 14, 1.6);
+  addText(c.x, c.y - 24, b.tip + '!', '#fff', 14, 1.6);
   burst(c.x, c.y, b.color, 22, 240);
   sfx.transform();
   speak(b.name);
@@ -761,8 +867,8 @@ function applyBuff(b) {
 
 function hurtCat(dmg) {
   const c = L.cat;
-  if (c.inv > 0 || L.buffT.shield > 0 || L.buffT.giant > 0) return;
-  dmg = Math.min(dmg, catMaxHp() * 0.25);   // 单次受伤不超过最大生命的 25%，再强的敌人也不会一下把猫打死
+  if (c.inv > 0 || L.buffT.shield > 0 || L.buffT.giant > 0 || L.redRageT > 0) return;
+  dmg = Math.min(dmg, catMaxHp() * 0.25);
   c.hp -= dmg; L.catLost += dmg; c.inv = 0.45; L.shake = Math.max(L.shake, 0.2);
   addText(c.x, c.y - 30, '-' + Math.round(dmg), '#ff6b5e', 16);
   sfx.hurt();
@@ -776,26 +882,24 @@ function hurtNest(dmg) {
 // ---------- 射击 ----------
 function fireWeapon(c) {
   const eq = G.eq, w = weaponDef(eq.id), s = weaponStats(eq.id, eq.tier);
-  const fast = (L.catnipT > 0 ? 0.65 : 1) * (L.buffT.rapid > 0 ? 0.6 : 1);
+  const fast = (L.catnipT > 0 ? 0.65 : 1) * (L.buffT.rapid > 0 ? 0.6 : 1) * (L.redRageT > 0 ? 0.55 : 1);
   c.cd = s.interval * fast;
-  const dmg = s.dmg * (1 + L.atkBuff) * (L.buffT.power > 0 ? 2 : 1);
+  const dmg = s.dmg * (1 + L.atkBuff) * (L.buffT.power > 0 ? 2 : 1) * (L.redRageT > 0 ? 1.5 : 1);
   for (let i = 0; i < s.count; i++) {
     let a = c.aim + rand(-s.jitter, s.jitter);
     if (s.count > 1) a += (i / (s.count - 1) - 0.5) * s.spread;
     L.bullets.push({
       x: c.x + Math.cos(c.aim) * 24, y: c.y + Math.sin(c.aim) * 24,
       vx: Math.cos(a) * s.speed, vy: Math.sin(a) * s.speed,
-      dmg, life: s.life, r: s.r * (L.buffT.power > 0 ? 1.5 : 1), pierce: s.pierce, explode: s.explode, splash: s.splash,
-      tier: eq.tier, color: s.color, kind: w.id, hit: new Set(),
+      dmg, life: s.life, r: s.r * (L.buffT.power > 0 || L.redRageT > 0 ? 1.5 : 1), pierce: s.pierce, explode: s.explode, splash: s.splash,
+      tier: eq.tier, color: L.redRageT > 0 ? '#ff3b2f' : s.color, kind: w.id, hit: new Set(),
     });
   }
-  // 枪口火花：品级越高越大、颜色越亮
   const big = (eq.id === 'shotgun' || eq.id === 'grenade') ? 6 : 0;
-  L.parts.push({ x: c.x + Math.cos(c.aim) * 32, y: c.y + Math.sin(c.aim) * 32, vx: 0, vy: 0, life: 0.07, max: 0.07, k: 'flash', color: eq.tier ? tierColor(eq.tier) : '#ffe9a0', r: 8 + eq.tier * 1.5 + big });
+  L.parts.push({ x: c.x + Math.cos(c.aim) * 32, y: c.y + Math.sin(c.aim) * 32, vx: 0, vy: 0, life: 0.07, max: 0.07, k: 'flash', color: L.redRageT > 0 ? '#ff4040' : eq.tier ? tierColor(eq.tier) : '#ffe9a0', r: 8 + eq.tier * 1.5 + big });
   sfx['shoot_' + w.id]();
 }
 
-// 命中特效：每种武器各有各的样子，品级越高越华丽
 function impactFx(b) {
   const t = b.tier || 0, tc = tierColor(t), s = 1 + t * 0.22, x = b.x, y = b.y;
   if (b.kind === 'pistol') {
@@ -810,9 +914,8 @@ function impactFx(b) {
     L.parts.push({ x, y, vx: 0, vy: 0, life: 0.18, max: 0.18, k: 'flash', color: '#ff7a7a', r: 16 * s });
     burst(x, y, '#ff6b6b', 4, 150);
   } else burst(x, y, b.color, 3, 80);
-  if (t >= 1) burst(x, y, tc, 2 + t, 140);   // 高阶武器会带上品级的颜色
+  if (t >= 1) burst(x, y, tc, 2 + t, 140);
 }
-// 溅射：子弹命中后波及周围的敌人，并画出波及范围
 function splashHit(b, hitE) {
   ring(b.x, b.y, b.splash, tierColor(b.tier), 0.3, true);
   for (const o of L.enemies) if (o !== hitE && !o.dead && dist(o, b) < b.splash + o.r) damageEnemy(o, b.dmg * 0.55);
@@ -835,31 +938,50 @@ function nearestEnemy(p, range) {
 }
 
 // ---------- 每帧更新 ----------
-// 猫咪当前的变身形态：由生效中的增益决定，优先显示最厉害的
+// 猫咪当前的变身形态：redRage（答对中文题后的5秒金光巨化）优先级最高
 const FORMS = {
-  giant: { s: 2.3, fur: '#ffcf5a', dark: '#e09a2a' },
-  power: { s: 1.45, fur: '#ff7a5c', dark: '#c8402d' },
-  rapid: { s: 1.2, fur: '#ffe066', dark: '#e0a800' },
-  shield: { s: 1.2, fur: '#8fc4ff', dark: '#4f8fdc' },
-  freeze: { s: 1.15, fur: '#c8f4ff', dark: '#7fd3e8' },
+  redRage: { s: 2.25, fur: '#ff2b2b', dark: '#a80000' },
+  giant:   { s: 2.3,  fur: '#ffcf5a', dark: '#e09a2a' },
+  power:   { s: 1.45, fur: '#ff7a5c', dark: '#c8402d' },
+  rapid:   { s: 1.2,  fur: '#ffe066', dark: '#e0a800' },
+  shield:  { s: 1.2,  fur: '#8fc4ff', dark: '#4f8fdc' },
+  freeze:  { s: 1.15, fur: '#c8f4ff', dark: '#7fd3e8' },
 };
-const currentForm = () => { for (const id in FORMS) if (L.buffT[id] > 0) return id; return null; };
-function updateForm(dt) {
+const currentForm = () => {
+  if (L.redRageT > 0) return 'redRage';
+  for (const id in FORMS) if (id !== 'redRage' && L.buffT[id] > 0) return id;
+  return null;
+};
+function updateForm(dt, rawDt) {
   const c = L.cat, form = currentForm();
-  if (L.form && !form) { burst(c.x, c.y, '#fff', 14, 160); sfx.revert(); }   // 变回原样
+  if (L.form && !form) { burst(c.x, c.y, '#fff', 14, 160); sfx.revert(); }
   L.form = form;
-  L.morphT = Math.max(0, L.morphT - dt);
-  c.s += ((form ? FORMS[form].s : 1) - c.s) * Math.min(1, dt * 9);
+  L.morphT = Math.max(0, L.morphT - rawDt);
+  c.s += ((form ? FORMS[form].s : 1) - c.s) * Math.min(1, rawDt * 10);
   // 残影
-  L.trailT -= dt;
-  if (form && form !== 'shield' && form !== 'freeze' && c.moving && L.trailT <= 0) { L.trailT = 0.06; L.trail.push({ x: c.x, y: c.y, s: c.s, color: FORMS[form].fur, life: 0.3 }); }
-  for (const t of L.trail) t.life -= dt;
+  L.trailT -= rawDt;
+  if (form && form !== 'shield' && form !== 'freeze' && (c.moving || form === 'redRage') && L.trailT <= 0) {
+    L.trailT = 0.055;
+    L.trail.push({ x: c.x, y: c.y, s: c.s, color: FORMS[form].fur, life: 0.32 });
+  }
+  for (const t of L.trail) t.life -= rawDt;
   L.trail = L.trail.filter(t => t.life > 0);
+  // 答对中文题后的 5 秒周身金光上升特效
+  if (form === 'redRage') {
+    for (let i = 0; i < 3; i++) {
+      L.parts.push({
+        x: c.x + rand(-36, 36), y: c.y + rand(-10, 26),
+        vx: rand(-18, 18), vy: rand(-210, -110),
+        life: rand(0.35, 0.7), max: 0.7, k: 'redbeam',
+        color: ['#ffd84a', '#ffe98a', '#ffb300'][randInt(0, 2)], r: rand(4, 8),
+      });
+    }
+  }
   if (form === 'power' && Math.random() < 0.5) L.parts.push({ x: c.x + rand(-16, 16), y: c.y + rand(-10, 14), vx: rand(-15, 15), vy: rand(-110, -50), life: rand(0.3, 0.55), color: Math.random() < 0.5 ? '#ff6b5e' : '#ffb347', r: rand(3, 5.5) });
   if (form === 'rapid' && Math.random() < 0.3) L.parts.push({ x: c.x + rand(-20, 20), y: c.y + rand(-24, 14), vx: rand(-60, 60), vy: rand(-60, 60), life: 0.2, color: '#fff7b0', r: rand(2, 3.5) });
-  // 巨猫踩扁靠近的敌人
-  if (form === 'giant') {
-    L.stompT -= dt;
+  // 巨猫或金光巨化踩扁靠近的敌人
+  if (form === 'giant' || form === 'redRage') {
+    L.stompT -= rawDt;
     if (L.stompT <= 0) {
       L.stompT = 0.22;
       let hit = false;
@@ -869,7 +991,6 @@ function updateForm(dt) {
   }
 }
 
-// 新道具：旋转飞镖、闪电云、小猫助手
 const SHURIKEN_R = 128;
 function updateGadgets(dt) {
   const c = L.cat, lv = G.level;
@@ -904,7 +1025,6 @@ function updateGadgets(dt) {
     }
   }
   for (const h of L.helpers) {
-    // 跟在猫咪身后
     const tx = c.x + h.side * 34, ty = c.y + 30, d = Math.hypot(tx - h.x, ty - h.y);
     if (d > 6) { const v = Math.min(d * 5, 330) * dt / d; h.x += (tx - h.x) * v; h.y += (ty - h.y) * v; }
     h.cd -= dt;
@@ -923,17 +1043,32 @@ function updateGadgets(dt) {
   L.bolts = L.bolts.filter(b => b.life > 0);
 }
 
-function update(dt) {
+function update(rawDt) {
   const c = L.cat;
+  // 处理答对中文题后的 5 秒慢镜头特写与金光巨化计时（按真实秒数倒计时 5 秒）
+  let timeScale = 1;
+  if (L.redRageT > 0) {
+    L.redRageT = Math.max(0, L.redRageT - rawDt);
+    // 前 1.8 秒强慢镜头特写 (0.35x)，后段保持慢动作特写 (0.55x)
+    timeScale = L.redRageT > 3.2 ? 0.35 : 0.55;
+    const targetZoom = L.redRageT > 3.2 ? 1.55 : 1.28;
+    camZoom += (targetZoom - camZoom) * Math.min(1, rawDt * 8);
+  } else {
+    camZoom += (1 - camZoom) * Math.min(1, rawDt * 8);
+  }
+  const dt = rawDt * timeScale;
+
   L.elapsed += dt;
   L.time = Math.max(0, L.time - dt);
-  L.banner -= dt; L.shake = Math.max(0, L.shake - dt); L.nestFlash -= dt;
-  if (L.catnipT > 0) L.catnipT -= dt;
-  for (const k in L.buffT) if (L.buffT[k] > 0) L.buffT[k] -= dt;
-  if (L.notice) { L.notice.t -= dt; if (L.notice.t <= 0) L.notice = null; }
-  if (L.toast) { L.toast.t -= dt; if (L.toast.t <= 0) L.toast = null; }
+  L.banner -= rawDt; L.shake = Math.max(0, L.shake - rawDt); L.nestFlash = Math.max(0, L.nestFlash - rawDt);
+  if (L.catnipT > 0) L.catnipT -= rawDt;
+  if (L.shockwaveCd > 0) L.shockwaveCd = Math.max(0, L.shockwaveCd - rawDt);
+  for (const k in L.buffT) if (L.buffT[k] > 0) L.buffT[k] -= rawDt;
+  if (L.notice) { L.notice.t -= rawDt; if (L.notice.t <= 0) L.notice = null; }
+  if (L.toast) { L.toast.t -= rawDt; if (L.toast.t <= 0) L.toast = null; }
 
-  // 移动
+  // 移动（在金光慢镜头期间猫咪依然保持敏捷手感）
+  const catDt = L.redRageT > 0 ? rawDt * 0.85 : dt;
   let mx = 0, my = 0;
   if (keys.a || keys.arrowleft) mx -= 1;
   if (keys.d || keys.arrowright) mx += 1;
@@ -943,29 +1078,28 @@ function update(dt) {
   const ml = Math.hypot(mx, my);
   c.moving = ml > 0.15;
   if (c.moving) {
-    const sp = catSpeed() * (L.catnipT > 0 ? 1.4 : 1) * (L.buffT.giant > 0 ? 1.15 : 1) * Math.min(1, ml);
-    let nx = c.x + mx / ml * sp * dt, ny = c.y + my / ml * sp * dt;
-    // 不能走进猫窝里
+    const sp = catSpeed() * (L.catnipT > 0 ? 1.4 : 1) * (L.buffT.giant > 0 || L.redRageT > 0 ? 1.2 : 1) * Math.min(1, ml);
+    let nx = c.x + mx / ml * sp * catDt, ny = c.y + my / ml * sp * catDt;
     const dn = Math.hypot(nx - NEST.x, ny - NEST.y), minD = NEST.r + c.r - 6;
     if (dn < minD) { nx = NEST.x + (nx - NEST.x) / dn * minD; ny = NEST.y + (ny - NEST.y) / dn * minD; }
     c.x = clamp(nx, c.r, WORLD.w - c.r); c.y = clamp(ny, c.r, WORLD.h - c.r);
-    c.walk += dt * 12;
+    c.walk += catDt * 12;
   }
-  // 被头目震飞
   if (Math.abs(c.kx) + Math.abs(c.ky) > 5) {
     c.x = clamp(c.x + c.kx * dt, c.r, WORLD.w - c.r); c.y = clamp(c.y + c.ky * dt, c.r, WORLD.h - c.r);
     const k = Math.pow(0.002, dt); c.kx *= k; c.ky *= k;
   }
-  c.inv -= dt; c.cd -= dt;
-  updateForm(dt);
+  c.inv -= rawDt; c.cd -= catDt;
+  updateForm(dt, rawDt);
 
   // 瞄准与射击
+  const effScale = scale * camZoom;
   let firing = false;
   if (touchMode) {
     const t = nearestEnemy(c, 430);
     if (t) { c.aim = Math.atan2(t.y - c.y, t.x - c.x); firing = true; }
   } else {
-    c.aim = Math.atan2(cam.y + mouse.y / scale - c.y, cam.x + mouse.x / scale - c.x);
+    c.aim = Math.atan2(cam.y + mouse.y / effScale - c.y, cam.x + mouse.x / effScale - c.x);
     firing = mouse.down;
   }
   if (firing && c.cd <= 0) fireWeapon(c);
@@ -974,18 +1108,19 @@ function update(dt) {
   if (L.time > 0) {
     L.spawnT -= dt;
     if (L.spawnT <= 0) {
-      const per = 1 + Math.floor(Math.max(0, G.level - 19) / 8);   // 很高的关卡每次刷出多只
+      const per = 1 + Math.floor(Math.max(0, G.level - 19) / 8);
       for (let i = 0; i < per; i++) spawnWave();
       const base = Math.max(0.45, 1.7 * Math.pow(0.92, G.level - 1));
       L.spawnT = base * (1 - 0.3 * L.elapsed / LEVEL_TIME) * rand(0.8, 1.2) * (L.boss ? 1.8 : 1);
     }
   }
-  if (L.isBoss && !L.bossSpawned && L.elapsed > 6) {
+  // 头目在关卡的最后出现（倒计时剩余 3 秒内登场，且血量翻倍）
+  if (L.isBoss && !L.bossSpawned && L.time <= 3) {
     L.bossSpawned = true;
     L.boss = spawnEnemy('boss');
     L.shake = 0.4; sfx.boss();
-    L.notice = { text: `${L.boss.kind.name}：${L.boss.kind.tip}`, t: 3.5 };
-    openQuiz(`${L.boss.kind.name}来了！`);
+    L.notice = { text: `关底头目登场：${L.boss.kind.name}（${L.boss.kind.tip}）`, t: 3.8 };
+    openQuiz(`${L.boss.kind.name}在关卡最后出现了！`);
     return;
   }
   if (L.boss && !L.bossHalfAsked && L.boss.hp < L.boss.maxHp / 2) {
@@ -1006,28 +1141,37 @@ function update(dt) {
     sfx.boss();
   }
 
-  // 敌人
+  // 敌人更新
   const frozen = L.buffT.freeze > 0;
   for (const e of L.enemies) {
     const d = ENEMIES[e.type];
-    e.flash -= dt;
+    e.flash -= rawDt;
+    // 处理冲击波的后退五格（500 像素）平滑高速震退位移
+    if (e.shockDist > 0) {
+      const step = Math.min(e.shockDist, 1800 * rawDt);
+      e.x = clamp(e.x + Math.cos(e.shockAngle) * step, 24, WORLD.w - 24);
+      e.y = clamp(e.y + Math.sin(e.shockAngle) * step, 24, WORLD.h - 24);
+      e.shockDist -= step;
+      if (Math.random() < 0.6) L.parts.push({ x: e.x, y: e.y + e.r * 0.6, vx: rand(-30, 30), vy: rand(-20, 20), life: 0.25, color: '#9be7ff', r: rand(2.5, 5) });
+    }
+    if (e.stunT > 0) { e.stunT -= rawDt; continue; }
     if (frozen) continue;
     e.cd -= dt; e.cd2 -= dt; e.t += dt;
     if (e.rage > 0) e.rage -= dt;
     if (e.type === 'boss') { updateBoss(e, dt, c); continue; }
     if (d.charger) { updateCharger(e, dt, c); continue; }
     if (d.healer) healTick(e, dt);
-    if (d.bomber) e.hunter = dist(e, c) < 340;   // 自爆老鼠：猫在附近就扑向猫，否则冲向猫窝
+    if (d.bomber) e.hunter = dist(e, c) < 340;
     const tgt = e.hunter ? c : NEST;
     let spd = e.spd * (e.rage > 0 ? 1.4 : 1);
-    if (e.type === 'elite' && e.t % 4 > 3) {   // 小头目每隔几秒冲刺一下
+    if (e.type === 'elite' && e.t % 4 > 3) {
       spd *= 2.6;
       if (Math.random() < 0.4) L.parts.push({ x: e.x, y: e.y + e.r * 0.7, vx: rand(-30, 30), vy: rand(-30, 0), life: 0.35, color: '#e3cf9a', r: rand(3, 5) });
     }
     if (ilv('fence') && dist(e, NEST) < FENCE_R) spd *= 1 - fenceSlow();
     const dx = tgt.x - e.x, dy = tgt.y - e.y, dd = Math.hypot(dx, dy) || 1;
     const stop = d.ranged ? 230 : (tgt === NEST ? NEST.r + e.r - 4 : c.r + e.r - 8);
-    if (d.flyer) {   // 蝙蝠：绕着弯子飞向猫
+    if (d.flyer) {
       const a = Math.atan2(dy, dx) + Math.sin(e.t * 4 + e.seed) * (dd > 120 ? 0.9 : 0.3);
       e.x += Math.cos(a) * spd * dt; e.y += Math.sin(a) * spd * dt;
       if (Math.abs(Math.cos(a)) > 0.1) e.face = Math.cos(a) < 0 ? -1 : 1;
@@ -1037,7 +1181,7 @@ function update(dt) {
     } else if (tgt === NEST && e.cd <= 0) {
       e.cd = 1; hurtNest(e.dmg);
     }
-    if (d.ranged && dd < 150) { e.x -= dx / dd * spd * 0.7 * dt; e.y -= dy / dd * spd * 0.7 * dt; }   // 远程敌人会和猫拉开距离
+    if (d.ranged && dd < 150) { e.x -= dx / dd * spd * 0.7 * dt; e.y -= dy / dd * spd * 0.7 * dt; }
     if (d.ranged && dd < 300 && e.cd <= 0) {
       e.cd = d.rcd || 2.2;
       const n = d.shots || 1, base = Math.atan2(dy, dx), pspd = d.pspd || 210;
@@ -1052,9 +1196,9 @@ function update(dt) {
   }
   updateGadgets(dt);
 
-  // 子弹
+  // 子弹（玩家子弹在慢镜头下保持正常高速）
   for (const b of L.bullets) {
-    b.x += b.vx * dt; b.y += b.vy * dt; b.life -= dt;
+    b.x += b.vx * catDt; b.y += b.vy * catDt; b.life -= catDt;
     for (const e of L.enemies) {
       if (e.dead || b.hit.has(e) || dist(e, b) > e.r + b.r) continue;
       if (b.explode) { explode(b); b.dead = true; break; }
@@ -1088,18 +1232,18 @@ function update(dt) {
   const magR = 60 + 55 * ilv('magnet');
   for (const f of L.fish) {
     const d = dist(f, c);
-    if (f.fly || d < magR) { const s = (f.fly ? 800 : 420) * dt / (d || 1); f.x += (c.x - f.x) * Math.min(1, s); f.y += (c.y - f.y) * Math.min(1, s); }
+    if (f.fly || d < magR) { const s = (f.fly ? 800 : 420) * rawDt / (d || 1); f.x += (c.x - f.x) * Math.min(1, s); f.y += (c.y - f.y) * Math.min(1, s); }
     if (d < c.r + 8) { f.dead = true; G.fish += f.v; sfx.pickup(); }
   }
   // 增益掉落物
   for (const d of L.drops) {
-    d.life -= dt; d.t += dt;
+    d.life -= rawDt; d.t += rawDt;
     if (dist(d, c) < c.r + 18) { d.life = 0; applyBuff(d.buff); }
   }
   L.drops = L.drops.filter(d => d.life > 0);
 
-  for (const p of L.parts) { p.x += p.vx * dt; p.y += p.vy * dt; p.life -= dt; }
-  for (const t of L.texts) { t.y -= 34 * dt; t.life -= dt; }
+  for (const p of L.parts) { p.x += p.vx * rawDt; p.y += p.vy * rawDt; p.life -= rawDt; }
+  for (const t of L.texts) { t.y -= 34 * rawDt; t.life -= rawDt; }
 
   L.enemies = L.enemies.filter(e => !e.dead);
   L.bullets = L.bullets.filter(b => !b.dead);
@@ -1108,9 +1252,13 @@ function update(dt) {
   L.parts = L.parts.filter(p => p.life > 0);
   L.texts = L.texts.filter(t => t.life > 0);
 
-  // 胜负
-  if (G.nestHp <= 0 || c.hp <= 0) return gameOver(G.nestHp <= 0 ? '猫窝被攻破了……' : '猫咪倒下了……');
-  if (L.time <= 0 && !L.boss) levelClear();
+  // 胜负判定：中途被打败时，若本关尚未使用复活考试，则触发 10 题中文复活考试
+  if (G.nestHp <= 0 || c.hp <= 0) {
+    const reason = G.nestHp <= 0 ? '猫窝被攻破了……' : '猫咪倒下了……';
+    if (!L.reviveUsed) return openReviveExam(reason);
+    return gameOver(reason);
+  }
+  if (L.time <= 0 && (!L.isBoss || L.bossSpawned) && !L.boss) levelClear();
 }
 
 // 星级：按本关猫咪和猫窝各损失了多少生命来评定
@@ -1122,7 +1270,7 @@ function rateLevel() {
 
 // 过关：先结算并存档，再播放庆祝动画（含星级），最后进商店
 function levelClear() {
-  for (const f of L.fish) { G.fish += f.v; f.v = 0; f.fly = true; }   // 地上的小鱼干飞向猫咪
+  for (const f of L.fish) { G.fish += f.v; f.v = 0; f.fly = true; }
   const r = rateLevel();
   G.lastBonus = 10 + 5 * G.level;
   G.lastStarBonus = r.stars === 3 ? 15 + 4 * G.level : r.stars === 2 ? 6 + 2 * G.level : 0;
@@ -1133,7 +1281,7 @@ function levelClear() {
   saveRun();
   if (G.level > store.best) { store.best = G.level; save(); }
   L.bullets = []; L.ebullets = []; L.drops = []; L.rings = []; L.bolts = []; L.trail = [];
-  L.form = null; L.cat.kx = L.cat.ky = 0;
+  L.form = null; L.cat.kx = L.cat.ky = 0; L.redRageT = 0; camZoom = 1;
   L.clearT = 0; L.fireworkT = 0; L.notice = null; L.starSnd = 0;
   for (const k in L.buffT) L.buffT[k] = 0;
   L.catnipT = 0;
@@ -1143,7 +1291,6 @@ function levelClear() {
 const CLEAR_TIME = 8;
 const STAR_T0 = 1.7, STAR_GAP = 0.6, STARS_DONE = STAR_T0 + 3 * STAR_GAP + 0.6;
 const PARTY = ['#ff6b5e', '#ffd84a', '#7ed957', '#5aa9ff', '#ff8fb1', '#b48cff'];
-// 结算画面的布局（屏幕坐标）：标题、星星、文字都叠在猫咪上方
 function clearLayout() {
   const u = clamp(Math.min(W / 460, H / 600), 0.6, 1.2), y0 = Math.max(14, H * 0.5 - 330 * u);
   return { u, y0, starY: y0 + 138 * u, R: 27 * u, gap: 78 * u };
@@ -1151,12 +1298,10 @@ function clearLayout() {
 const starPos = i => { const l = clearLayout(); return { x: W / 2 + (i - 1) * l.gap, y: l.starY }; };
 function updateClear(dt) {
   const c = L.cat;
-  L.clearT += dt; L.shake = 0;
-  // 猫咪举枪蹦跳
+  L.clearT += dt; L.shake = 0; camZoom = 1;
   c.hop = -Math.abs(Math.sin(L.clearT * 7)) * 14;
   c.aim = -0.95 + Math.sin(L.clearT * 8) * 0.3;
   c.moving = false; c.inv = 0; c.s += (1 - c.s) * Math.min(1, dt * 9);
-  // 星星依次出现
   for (let i = 0; i < 3; i++) {
     if (L.starSnd > i || L.clearT < STAR_T0 + i * STAR_GAP) continue;
     L.starSnd = i + 1;
@@ -1166,7 +1311,6 @@ function updateClear(dt) {
       if (i === 2) for (let k = 0; k < 3; k++) burst(wx + rand(-120, 120), wy + rand(-40, 80), PARTY[randInt(0, 5)], 22, 260);
     } else sfx.starMiss();
   }
-  // 入侵者吓得逃跑
   for (const e of L.enemies) {
     const dx = e.x - NEST.x, dy = e.y - NEST.y, dd = Math.hypot(dx, dy) || 1;
     e.x += dx / dd * 300 * dt; e.y += dy / dd * 300 * dt;
@@ -1180,7 +1324,6 @@ function updateClear(dt) {
     if (d < c.r + 8) { f.dead = true; sfx.pickup(); }
   }
   L.fish = L.fish.filter(f => !f.dead);
-  // 彩纸和烟花（三星时更盛大）
   const vw = W / scale, vh = H / scale, party = G.lastStars === 3 ? 2 : 1;
   for (let i = 0; i < 2 * party; i++) L.parts.push({ x: cam.x + rand(0, vw), y: cam.y - 10, vx: rand(-40, 40), vy: rand(140, 300), life: rand(1.2, 2.2), color: PARTY[randInt(0, 5)], r: rand(3, 5.5) });
   L.fireworkT -= dt;
@@ -1195,21 +1338,27 @@ function updateClear(dt) {
   L.texts = L.texts.filter(t => t.life > 0);
   if (L.clearT >= CLEAR_TIME) openShop();
 }
-// 点一下先把星星直接显示完，再点一下进商店
 function skipClear() {
   if (state !== 'clear' || L.clearT < 0.7) return;
   if (L.clearT < STARS_DONE) { L.clearT = STARS_DONE; L.starSnd = 3; } else openShop();
 }
 function openShop() {
   delete L.cat.hop;
-  L.enemies = []; L.fish = [];
+  L.enemies = []; L.fish = []; camZoom = 1;
   setState('shop');
   renderShop();
   $('shopBody').scrollTop = 0;
   show('shop');
+  // 如果刚刚击败了头目解锁了新道具，播放新道具解锁全屏动画
+  if (G.pendingUnlock) {
+    const uid = G.pendingUnlock;
+    G.pendingUnlock = null;
+    saveRun();
+    showUnlock(uid);
+  }
 }
-
 function gameOver(reason) {
+  camZoom = 1;
   const cleared = G.level - 1;
   if (cleared > store.best) { store.best = cleared; save(); }
   clearRun();
@@ -1223,46 +1372,256 @@ function gameOver(reason) {
   show('over');
 }
 
-// ---------- 头目填空题 ----------
-const pyTag = py => store.pinyin ? `<small>${py}</small>` : '';
+// ---------- 头目中文题（涵盖词语填空、成语填空、古诗名句填空） ----------
+const pyTag = py => store.pinyin && py ? `<small>${py}</small>` : '';
 let quiz = null;
 function openQuiz(title) {
-  const q = nextFill();
+  const roll = Math.random();
+  let bank = FILL_QUIZ, bKey = 'fill', qType = '词语填空';
+  if (roll < 0.34) { bank = IDIOM_QUIZ; bKey = 'idiom'; qType = '成语填空'; }
+  else if (roll < 0.65) { bank = POEM_QUIZ; bKey = 'poem'; qType = '古诗填空'; }
+  const q = pickFromBank(bank, bKey);
   const opts = shuffle(q.opts.map((o, i) => { const [w, py] = o.split('|'); return { w, py, ok: i === 0 }; }));
-  quiz = { q, opts, title, answered: false };
+  const gName = GRADE_LEVELS[q.grade || 1].short;
+  quiz = { q, opts, title, qType, gName, answered: false, correct: false };
   setState('quiz');
   renderQuiz();
   show('quiz');
 }
 function renderQuiz(chosen) {
-  const { q, opts, title, answered } = quiz;
+  const { q, opts, title, qType, gName, answered } = quiz;
   const ans = q.opts[0].split('|')[0];
   const sent = q.s.replace('____', `<span class="blank">${answered ? ans : '&nbsp;'}</span>`);
-  let h = `<div class="qtitle">⚠ ${title} 答对填空题：本关攻击力 +50%</div>
+  let h = `<div class="qbadge">📚 ${qType} · ${gName}</div>
+    <div class="qtitle">⚠️ ${title} 答对问题：攻击力 +50% 并触发 5 秒金光觉醒！</div>
     <div class="qsent">${sent}</div><div class="opts">`;
   opts.forEach((o, i) => {
     let cls = 'opt';
     if (answered) { if (o.ok) cls += ' right'; else if (i === chosen) cls += ' wrong'; }
-    h += `<button class="${cls}" data-action="quizAns" data-i="${i}" ${answered ? 'disabled' : ''}>${o.w}${pyTag(o.py)}</button>`;
+    h += `<button class="${cls}" data-action="quizAns" data-i="${i}" ${answered ? 'disabled' : ''}><span class="knum">${i + 1}</span>${o.w}${pyTag(o.py)}</button>`;
   });
   h += '</div>';
   if (answered) {
     const ok = opts[chosen].ok;
+    const cleanSent = q.s.replace('____', ans).replace(/（.*?）/g, '');
     h += `<div class="qfb">
-      <div class="res ${ok ? 'ok' : 'no'}">${ok ? '答对了！攻击力 +50%' : '答错了，正确答案是「' + ans + '」'}</div>
-      <div class="full">${q.s.replace('____', ans)}<button class="speak" data-action="speak" data-t="${q.s.replace('____', ans)}">🔊</button></div>
-      <div>${q.py}</div><div>${q.en}</div></div>
-      <button class="big" data-action="quizDone">继续战斗</button>`;
+      <div class="res ${ok ? 'ok' : 'no'}">${ok ? '答对了！攻击力 +50% · 准备金光觉醒！' : '答错了，正确答案是「' + ans + '」'}</div>
+      <div class="full">${q.s.replace('____', ans)}<button class="speak" data-action="speak" data-t="${cleanSent}">🔊</button></div>
+      <div>${q.py}</div><div>${q.en}</div>
+      <button class="big" data-action="quizDone">${ok ? '🔥 觉醒并继续战斗' : '继续战斗'}</button>`;
   }
   $('quizBody').innerHTML = h;
 }
 function answerQuiz(i) {
-  if (quiz.answered) return;
+  if (!quiz || quiz.answered || i < 0 || i >= quiz.opts.length) return;
   quiz.answered = true;
   const ok = quiz.opts[i].ok;
+  quiz.correct = ok;
   if (ok) { L.atkBuff += 0.5; sfx.right(); } else sfx.wrong();
   renderQuiz(i);
-  speak(quiz.q.s.replace('____', quiz.q.opts[0].split('|')[0]));
+  const cleanSent = quiz.q.s.replace('____', quiz.q.opts[0].split('|')[0]).replace(/（.*?）/g, '');
+  speak(cleanSent);
+}
+function finishQuiz() {
+  const won = quiz && quiz.correct;
+  show(null);
+  setState('playing');
+  if (won) triggerRedRage();
+}
+
+// ---------- 中途战败：10题中文复活考试（偏旁填空、词语填空、成语填空、读音选择，答对>=8题复活） ----------
+let exam = null;
+function makeExamQuestion(kind) {
+  if (kind === 'radical') {
+    const w = pickFromBank(COMPONENTS, 'exam_comp');
+    const gName = GRADE_LEVELS[w.grade || 1].short;
+    // 两种问法：偏旁填空 或 部件拼字
+    if (Math.random() < 0.5) {
+      return {
+        qType: '偏旁填空', gName,
+        prompt: `<div class="qsent">「<span class="blank">&nbsp;</span>」+「${w.parts[1]}」= <b>${w.c}</b>（${w.en}）</div><div class="qhint">请选择正确的偏旁/部件组成「${w.c}」字</div>`,
+        answeredPrompt: `<div class="qsent">「<span class="blank">${w.parts[0]}</span>」+「${w.parts[1]}」= <b>${w.c}</b>（${w.en}）</div>`,
+        opts: shuffle([
+          { t: w.parts[0], sub: '', ok: true },
+          ...shuffle(['氵', '亻', '口', '女', '木', '日', '艹', '宀', '讠', '忄', '犭', '竹', '目'].filter(p => p !== w.parts[0])).slice(0, 3).map(p => ({ t: p, sub: '', ok: false })),
+        ]),
+        ansText: `${w.parts[0]} + ${w.parts[1]} = ${w.c}`,
+        info: `${w.c} (${w.py}) · ${w.en}`,
+        say: w.c,
+      };
+    }
+    return {
+      qType: '偏旁填空', gName,
+      prompt: `<div class="qsent">「${w.parts[0]}」+「${w.parts[1]}」= <span class="blank">&nbsp;</span></div><div class="qhint">含义提示：${w.en}</div>`,
+      answeredPrompt: `<div class="qsent">「${w.parts[0]}」+「${w.parts[1]}」= <span class="blank">${w.c}</span></div>`,
+      opts: shuffle([{ t: w.c, sub: '', ok: true }, ...w.wrong.slice(0, 3).map(x => ({ t: x, sub: '', ok: false }))]),
+      ansText: w.c,
+      info: `${w.c} (${w.py}) · ${w.en}`,
+      say: w.c,
+    };
+  }
+  if (kind === 'word') {
+    const q = pickFromBank(FILL_QUIZ, 'exam_fill');
+    const gName = GRADE_LEVELS[q.grade || 1].short;
+    const ans = q.opts[0].split('|')[0];
+    return {
+      qType: '词语填空', gName,
+      prompt: `<div class="qsent">${q.s.replace('____', '<span class="blank">&nbsp;</span>')}</div><div class="qhint">${q.en}</div>`,
+      answeredPrompt: `<div class="qsent">${q.s.replace('____', `<span class="blank">${ans}</span>`)}</div>`,
+      opts: shuffle(q.opts.map((o, i) => { const [w, py] = o.split('|'); return { t: w, sub: py, ok: i === 0 }; })),
+      ansText: ans,
+      info: `${q.py} · ${q.en}`,
+      say: q.s.replace('____', ans),
+    };
+  }
+  if (kind === 'idiom') {
+    const q = pickFromBank(IDIOM_QUIZ, 'exam_idiom');
+    const gName = GRADE_LEVELS[q.grade || 1].short;
+    const ans = q.opts[0].split('|')[0];
+    return {
+      qType: '成语填空', gName,
+      prompt: `<div class="qsent">${q.s.replace('____', '<span class="blank">&nbsp;</span>')}</div><div class="qhint">${q.en}</div>`,
+      answeredPrompt: `<div class="qsent">${q.s.replace('____', `<span class="blank">${ans}</span>`)}</div>`,
+      opts: shuffle(q.opts.map((o, i) => { const [w, py] = o.split('|'); return { t: w, sub: py, ok: i === 0 }; })),
+      ansText: ans,
+      info: `${q.py} · ${q.en}`,
+      say: q.s.replace('____', ans).replace(/（.*?）/g, ''),
+    };
+  }
+  // pronounce: 读音选择
+  const q = pickFromBank(PRONOUNCE_QUIZ, 'exam_pron');
+  const gName = GRADE_LEVELS[q.grade || 1].short;
+  const ans = q.opts[0];
+  return {
+    qType: '读音选择', gName,
+    prompt: `<div class="qsent">${q.w}</div><div class="qhint">请选择「<b>${q.target}</b>」字的正确读音（${q.en}）</div>`,
+    answeredPrompt: `<div class="qsent">${q.w}（「${q.target}」读作 <span class="blank">${ans}</span>）</div>`,
+    opts: shuffle(q.opts.map((py, i) => ({ t: py, sub: '', ok: i === 0 }))),
+    ansText: ans,
+    info: `「${q.target}」正确读音：${ans} · ${q.en}`,
+    say: q.w.replace(/（.*?）/g, ''),
+  };
+}
+
+function openReviveExam(reason) {
+  // 10 道考题：3 偏旁填空 + 3 词语填空 + 2 成语填空 + 2 读音选择
+  const types = ['radical', 'radical', 'radical', 'word', 'word', 'word', 'idiom', 'idiom', 'pronounce', 'pronounce'];
+  const questions = types.map(t => makeExamQuestion(t));
+  exam = {
+    reason,
+    questions,
+    results: Array(10).fill(null), // true | false | null
+    i: 0,
+    right: 0,
+    total: 10,
+    passNeed: 8,
+    chosen: -1,
+    finished: false,
+  };
+  sfx.boss();
+  setState('exam');
+  renderExam();
+  show('exam');
+}
+
+function renderExam() {
+  const ex = exam;
+  if (ex.finished) {
+    const passed = ex.right >= ex.passNeed;
+    $('examBody').innerHTML = `
+      <h2>${passed ? '🎉 考试通过！成功复活！' : '😢 考试未达标'}</h2>
+      <div class="stat">
+        本次中文考试成绩：<b>${ex.right}</b> / ${ex.total} 题（及格线：${ex.passNeed} 题）<br>
+        ${passed ? '猫咪生命已全部回满，猫窝已紧急修复，并获得无敌护盾！' : `差一点点！再答对 ${ex.passNeed - ex.right} 题就能复活了。`}
+      </div>
+      ${passed
+        ? '<button class="big" data-action="examRevive">⚡ 满血复活，继续战斗！</button>'
+        : '<button class="big" data-action="examFail">查看本局结算</button>'}`;
+    return;
+  }
+  const q = ex.questions[ex.i];
+  const answered = ex.chosen >= 0;
+  const dots = ex.results.map((r, idx) => {
+    const cls = r === true ? 'ok' : r === false ? 'no' : idx === ex.i ? 'cur' : '';
+    return `<div class="exam-dot ${cls}">${r === true ? '✓' : r === false ? '✗' : idx + 1}</div>`;
+  }).join('');
+  let h = `
+    <div class="exam-prog">
+      <div class="qtitle" style="margin:0">🚑 危急时刻：中文复活考试（答对 8/10 题满血复活）</div>
+      <div style="font-size:13px">进度：第 <b>${ex.i + 1}</b> / ${ex.total} 题 · 已答对 <b>${ex.right}</b> 题</div>
+      <div class="exam-dots">${dots}</div>
+    </div>
+    <div class="qbadge">📝 ${q.qType} · ${q.gName}</div>
+    ${answered ? q.answeredPrompt : q.prompt}
+    <div class="opts">`;
+  q.opts.forEach((o, i) => {
+    let cls = 'opt';
+    if (answered) { if (o.ok) cls += ' right'; else if (i === ex.chosen) cls += ' wrong'; }
+    h += `<button class="${cls}" data-action="examAns" data-i="${i}" ${answered ? 'disabled' : ''}><span class="knum">${i + 1}</span>${o.t}${pyTag(o.sub)}</button>`;
+  });
+  h += '</div>';
+  if (answered) {
+    const ok = q.opts[ex.chosen].ok;
+    h += `<div class="qfb">
+      <div class="res ${ok ? 'ok' : 'no'}">${ok ? '✓ 答对了！' : `✗ 答错了，正确答案是「${q.ansText}」`}</div>
+      <div class="full">${q.info}<button class="speak" data-action="speak" data-t="${q.say}">🔊</button></div>
+      <button class="big" data-action="examNext">${ex.i + 1 < ex.total ? '下一题' : '查看考试结果'}</button>
+    </div>`;
+  } else {
+    h += `<button class="plain" data-action="examGiveUp">放弃考试，直接结算</button>`;
+  }
+  $('examBody').innerHTML = h;
+}
+
+function answerExam(i) {
+  const ex = exam;
+  if (!ex || ex.finished || ex.chosen >= 0) return;
+  const q = ex.questions[ex.i];
+  if (i < 0 || i >= q.opts.length) return;
+  ex.chosen = i;
+  const ok = q.opts[i].ok;
+  ex.results[ex.i] = ok;
+  if (ok) { ex.right++; sfx.right(); } else sfx.wrong();
+  renderExam();
+  speak(q.say);
+}
+
+function nextExam() {
+  const ex = exam;
+  if (!ex || ex.finished) return;
+  if (ex.i + 1 < ex.total) {
+    ex.i++;
+    ex.chosen = -1;
+    renderExam();
+  } else {
+    ex.finished = true;
+    if (ex.right >= ex.passNeed) sfx.unlock(); else sfx.wrong();
+    renderExam();
+  }
+}
+
+function reviveFromExam() {
+  if (!L) return;
+  L.reviveUsed = true;
+  L.cat.hp = catMaxHp();
+  L.cat.inv = 3.5;
+  if (G.nestHp <= 0) G.nestHp = Math.max(150, Math.round(nestMaxHp() * 0.6));
+  L.ebullets = [];
+  // 震退猫和猫窝周围的敌人，给复活留出安全空间
+  for (const e of L.enemies) {
+    if (dist(e, L.cat) < 280 || dist(e, NEST) < 260) {
+      const a = Math.atan2(e.y - NEST.y, e.x - NEST.x);
+      e.shockDist = 320;
+      e.shockAngle = a;
+      e.stunT = 1.5;
+    }
+  }
+  ring(L.cat.x, L.cat.y, 180, '#7ed957', 0.6, true);
+  burst(L.cat.x, L.cat.y, '#ffe066', 26, 260);
+  addText(L.cat.x, L.cat.y - 44, '🎉 考试通过！满血复活！', '#9cff6b', 20, 2.0);
+  sfx.transform();
+  show(null);
+  setState('playing');
 }
 
 // ---------- 商店里的汉字小游戏 ----------
@@ -1270,6 +1629,8 @@ const MINI_TYPES = [
   { id: 'pic', name: '看图选字', tip: '看图片，选出正确的字。' },
   { id: 'comp', name: '偏旁拼字', tip: '两个部分合起来是哪个字？' },
   { id: 'tone', name: '选声调', tip: '这个字读第几声？选出正确的拼音。' },
+  { id: 'idiom', name: '成语挑战', tip: '根据意思补全四字成语。' },
+  { id: 'poem', name: '古诗名句', tip: '选出古诗中空缺的字词。' },
 ];
 const TONES = { a: 'āáǎà', e: 'ēéěè', i: 'īíǐì', o: 'ōóǒò', u: 'ūúǔù', 'ü': 'ǖǘǚǜ' };
 function toneVariants(py) {
@@ -1281,22 +1642,34 @@ function toneVariants(py) {
 const miniType = () => MINI_TYPES[(G.level - 1) % MINI_TYPES.length];
 const miniReward = () => 12 + 3 * G.level;
 let mini = null;
-
 function makeMiniQuestion(type) {
   if (type === 'pic') {
-    const w = nextPic();
+    const w = pickFromBank(PIC_WORDS, 'mini_pic');
     const wrong = shuffle(PIC_WORDS.filter(x => x.c !== w.c && x.c.length === w.c.length)).slice(0, 3);
     return { prompt: `<div class="qbig">${w.e}</div><div class="qhint">${w.en}</div>`,
-      opts: shuffle([{ t: w.c, ok: true }, ...wrong.map(x => ({ t: x.c }))]), info: `${w.e} ${w.c}　${w.py}　${w.en}`, say: w.c };
+      opts: shuffle([{ t: w.c, ok: true }, ...wrong.map(x => ({ t: x.c }))]), info: `${w.e} ${w.c} ${w.py} ${w.en}`, say: w.c };
   }
   if (type === 'comp') {
-    const w = nextComp();
-    return { prompt: `<div class="qbig">${w.parts[0]} + ${w.parts[1]} = ?</div>`,
-      opts: shuffle([{ t: w.c, ok: true }, ...w.wrong.map(x => ({ t: x }))]), info: `${w.c}　${w.py}　${w.en}`, say: w.c };
+    const w = pickFromBank(COMPONENTS, 'mini_comp');
+    return { prompt: `<div class="qbig">${w.parts[0]} + ${w.parts[1]} = ?</div><div class="qhint">${w.en}</div>`,
+      opts: shuffle([{ t: w.c, ok: true }, ...w.wrong.map(x => ({ t: x }))]), info: `${w.c} ${w.py} ${w.en}`, say: w.c };
   }
-  const w = nextTone();
+  if (type === 'idiom') {
+    const q = pickFromBank(IDIOM_QUIZ, 'mini_idiom');
+    const ans = q.opts[0].split('|')[0];
+    return { prompt: `<div class="qsent">${q.s.replace('____', '<span class="blank">&nbsp;</span>')}</div><div class="qhint">${q.en}</div>`,
+      opts: shuffle(q.opts.map((o, i) => ({ t: o.split('|')[0], ok: i === 0 }))), info: `${q.s.replace('____', ans)} (${q.py})`, say: q.s.replace('____', ans).replace(/（.*?）/g, '') };
+  }
+  if (type === 'poem') {
+    const q = pickFromBank(POEM_QUIZ, 'mini_poem');
+    const ans = q.opts[0].split('|')[0];
+    return { prompt: `<div class="qsent">${q.s.replace('____', '<span class="blank">&nbsp;</span>')}</div><div class="qhint">${q.en}</div>`,
+      opts: shuffle(q.opts.map((o, i) => ({ t: o.split('|')[0], ok: i === 0 }))), info: `${q.s.replace('____', ans)} (${q.py})`, say: q.s.replace('____', ans).replace(/（.*?）/g, '') };
+  }
+  const singlePool = PIC_WORDS.filter(w => w.c.length === 1);
+  const w = pickFromBank(singlePool, 'mini_tone');
   return { prompt: `<div class="qbig">${w.c}</div><div class="qhint">${w.e} ${w.en}</div>`,
-    opts: shuffle(toneVariants(w.py).map(v => ({ t: v, ok: v === w.py }))), info: `${w.e} ${w.c}　${w.py}　${w.en}`, say: w.c };
+    opts: shuffle(toneVariants(w.py).map(v => ({ t: v, ok: v === w.py }))), info: `${w.e} ${w.c} ${w.py} ${w.en}`, say: w.c };
 }
 function openMini() {
   if (G.miniPlayed) return;
@@ -1310,12 +1683,12 @@ function openMini() {
 }
 function renderMini() {
   const m = mini, q = m.q, answered = m.chosen >= 0;
-  let h = `<div class="qtitle">汉字小游戏 · ${m.type.name}（${m.i + 1}/${m.total}）</div>
+  let h = `<div class="qtitle">汉字小游戏 · ${m.type.name} (${m.i + 1}/${m.total}) </div>
     <div class="qhint">${m.type.tip} 每答对一题 +${miniReward()} 🐟</div>${q.prompt}<div class="opts">`;
   q.opts.forEach((o, i) => {
     let cls = 'opt';
     if (answered) { if (o.ok) cls += ' right'; else if (i === m.chosen) cls += ' wrong'; }
-    h += `<button class="${cls}" data-action="miniAns" data-i="${i}" ${answered ? 'disabled' : ''}>${o.t}</button>`;
+    h += `<button class="${cls}" data-action="miniAns" data-i="${i}" ${answered ? 'disabled' : ''}><span class="knum">${i + 1}</span>${o.t}</button>`;
   });
   h += '</div>';
   if (answered) {
@@ -1328,7 +1701,7 @@ function renderMini() {
 }
 function answerMini(i) {
   const m = mini;
-  if (m.chosen >= 0) return;
+  if (!m || m.chosen >= 0 || i < 0 || i >= m.q.opts.length) return;
   m.chosen = i;
   if (m.q.opts[i].ok) { m.right++; sfx.right(); } else sfx.wrong();
   renderMini();
@@ -1348,27 +1721,24 @@ function nextMini() {
 }
 
 // ---------- 商店 ----------
-function card({ icon, name, py, desc, lv, btns, equipped }) {
-  return `<div class="card${equipped ? ' equipped' : ''}"><div class="hd"><img class="ic" src="${ICONS.url[icon]}" alt=""><div>
-    <div class="nm">${name}</div>${store.pinyin ? `<div class="py">${py}</div>` : ''}</div></div>
+function card({ icon, name, py, desc, lv, btns, equipped, locked }) {
+  return `<div class="card${equipped ? ' equipped' : ''}${locked ? ' locked' : ''}"><div class="hd"><img class="ic" src="${ICONS.url[icon]}" alt=""><div>
+    <div class="nm">${name}</div>${store.pinyin && py ? `<div class="py">${py}</div>` : ''}</div></div>
     <div class="ds">${desc}</div><div class="lv">${lv}</div><div class="row">${btns}</div></div>`;
 }
 const btn = (action, id, label, enabled = true) => `<button data-action="${action}" data-id="${id}" ${enabled ? '' : 'disabled'}>${label}</button>`;
-
 function renderShop() {
   const fish = G.fish, mt = miniType();
   const starRow = n => [0, 1, 2].map(i => `<span class="${i < n ? '' : 'off'}">★</span>`).join('');
   const totalStars = Object.values(G.stars).reduce((a, b) => a + b, 0);
   let h = `<div class="shophead"><h2>第 ${G.level} 关完成！<span class="stars">${starRow(G.lastStars)}</span></h2>
     <div class="fishbar">🐟 ${fish}</div></div>
-    <div style="font-size:13px;margin:2px 0 8px">过关奖励 +${G.lastBonus}${G.lastStarBonus ? `，星级奖励 +${G.lastStarBonus}` : ''} 🐟　·　累计 ★ ${totalStars}</div>
-    <div class="minicard"><div class="txt"><b>汉字小游戏 · ${mt.name}</b><br>答 3 道题，每答对一题 +${miniReward()} 🐟，全对再 +15 🐟。</div>
-    ${btn('mini', '', G.miniPlayed ? '已玩过' : '开始', !G.miniPlayed)}</div>`;
+    <div style="font-size:13px;margin:2px 0 8px">过关奖励 +${G.lastBonus}${G.lastStarBonus ? `, 星级奖励 +${G.lastStarBonus}` : ''} 🐟 · 累计 ★ ${totalStars} · 下一关开始猫咪生命自动回满 (${catMaxHp()} HP)</div>
+    <div class="minicard"><div class="txt"><b>汉字小游戏 · ${mt.name}</b><br>答 3 道题，每答对一题 +${miniReward()} 🐟，全对再 +15 🐟。</div>${btn('mini', '', G.miniPlayed ? '已玩过' : '开始', !G.miniPlayed)}</div>`;
 
-  // 武器库：同品级的武器叠在一起，凑够数量可以合成
+  // 武器库
   const own = ownedList(), canMerge = own.some(o => o.tier < TIERS.length - 1 && o.n >= MERGE_NEED[o.tier]);
-  h += `<h3>武器库</h3><div class="wtools"><span>相同的武器 ${MERGE_NEED[0]} 把合成 1 把更高一阶（A 级起需要 ${MERGE_NEED[3]} 把）</span>
-    <button data-action="mergeAll" ${canMerge ? '' : 'disabled'}>一键合成</button></div><div class="wgrid">`;
+  h += `<h3>武器库</h3><div class="wtools"><span>相同的武器 ${MERGE_NEED[0]} 把合成 1 把更高一阶（A 级起需要 ${MERGE_NEED[3]} 把）</span><button data-action="mergeAll" ${canMerge ? '' : 'disabled'}>一键合成</button></div><div class="wgrid">`;
   for (const o of own) {
     const w = weaponDef(o.id), s = weaponStats(o.id, o.tier), eqd = G.eq.id === o.id && G.eq.tier === o.tier;
     const need = MERGE_NEED[o.tier], top = o.tier >= TIERS.length - 1, key = `${o.id}:${o.tier}`;
@@ -1382,25 +1752,41 @@ function renderShop() {
   for (const w of WEAPONS) {
     const s = weaponStats(w.id, 0), have = G.inv[w.id].reduce((a, b) => a + b, 0);
     h += card({ icon: w.id, name: w.name, py: w.py, desc: w.desc,
-      lv: `D 级　伤害 ${Math.round(s.dmg)}${s.count > 1 ? '×' + s.count : ''}　${s.area}${have ? `　已有 ${have} 把` : ''}`,
+      lv: `D 级 伤害 ${Math.round(s.dmg)}${s.count > 1 ? '×' + s.count : ''} ${s.area}${have ? ` · 已有 ${have} 把` : ''}`,
       btns: btn('buyW', w.id, `购买 ${w.cost} 🐟`, fish >= w.cost) });
   }
-  h += '</div><h3>道具（有使用次数，用完就消失）</h3><div class="cards">';
-  for (const it of ITEMS) {
+
+  // 道具区：游戏开始时没有道具可购买；每打败一个 Boss 解锁一个道具
+  h += `</div><h3>道具（已解锁 ${G.unlockedItems}/${ITEMS.length} · 每击败 1 个头目解锁 1 个）</h3><div class="cards">`;
+  const unlockedList = ITEMS.slice(0, G.unlockedItems);
+  for (const it of unlockedList) {
     const st = G.items[it.id], upC = itemUpCost(it, st.lv);
     const up = st.lv < it.max ? btn('upI', it.id, `升级 ${upC} 🐟`, fish >= upC) : btn('', '', '强度已满', false);
     if (it.multi) {
-      // 没满就多买一座/一枚；满了就给剩余关数最少的那个补充
       const full = st.units.length >= it.multi, canTop = st.units.some(u => u < ITEM_CAP);
       const buy = btn('buyI', it.id, full ? `补充 +${it.pack} 关 ${it.cost} 🐟` : `+1 ${it.unit} ${it.cost} 🐟`, fish >= it.cost && (!full || canTop));
       const have = st.units.length ? `已有 <b>${st.units.length}/${it.multi}</b> ${it.unit}，各剩 ${st.units.join('/')} 关` : `还没有（最多 ${it.multi} ${it.unit}）`;
       h += card({ icon: it.id, name: it.name, py: it.py, desc: it.desc, lv: `${have}<br>强度 ${st.lv}/${it.max}：${it.eff(st.lv)}`, btns: buy + up });
       continue;
     }
-    const btns = btn('buyI', it.id, `+${it.pack} 次 ${it.cost} 🐟`, fish >= it.cost && st.uses < ITEM_CAP) + up;
-    h += card({ icon: it.id, name: it.name, py: it.py, desc: it.desc, lv: `剩余 <b>${st.uses}</b> 次　强度 ${st.lv}/${it.max}：${it.eff(st.lv)}`, btns });
+    const buyLabel = it.pack === 1 ? `+1 个 ${it.cost} 🐟` : `+${it.pack} 次 ${it.cost} 🐟`;
+    const btns = btn('buyI', it.id, buyLabel, fish >= it.cost && st.uses < ITEM_CAP) + up;
+    h += card({ icon: it.id, name: it.name, py: it.py, desc: it.desc, lv: `剩余 <b>${st.uses}</b> 次 · 强度 ${st.lv}/${it.max}：${it.eff(st.lv)}`, btns });
   }
-  h += '</div><h3>强化</h3><div class="cards">';
+  if (G.unlockedItems < ITEMS.length) {
+    const nxt = ITEMS[G.unlockedItems];
+    h += card({
+      icon: nxt.id,
+      name: `🔒 待解锁：${nxt.name}`,
+      py: nxt.py,
+      desc: G.unlockedItems === 0 ? '游戏初始无道具可买。击败第 3 关头目即可解锁首件道具！' : '击败下一个头目即可解锁此道具！',
+      lv: `预告：${nxt.desc}`,
+      btns: btn('', '', '击败头目解锁', false),
+      locked: true,
+    });
+  }
+
+  h += '</div><h3>生命升级与加固猫窝</h3><div class="cards">';
   for (const s of STATS) {
     const lv = G.stats[s.id], c = statCost(lv);
     const btns = lv < s.max ? btn('stat', s.id, `强化 ${c} 🐟`, fish >= c) : btn('', '', '已满级', false);
@@ -1417,7 +1803,6 @@ function renderShop() {
   body.innerHTML = h;
   body.scrollTop = st;
 }
-
 function pay(cost) { if (G.fish < cost) return false; G.fish -= cost; sfx.buy(); return true; }
 
 // 合成成功的庆祝画面
@@ -1425,13 +1810,36 @@ let mergeTimer = 0;
 function showMerge(id, from, to) {
   const el = $('mergeFx'), w = weaponDef(id);
   el.innerHTML = `<div class="mfbox"><div class="mfrays"></div><div class="ttl">合成成功！</div><img src="${ICONS.url[id]}" alt="">
-    <div>${tierBadge(from)} → ${tierBadge(to, 'big')}</div><div class="sub">${w.name}　${TIERS[to].name}</div></div>`;
+    <div>${tierBadge(from)} → ${tierBadge(to, 'big')}</div><div class="sub">${w.name} ${TIERS[to].name}</div></div>`;
   el.classList.add('show');
   if (to >= 4) sfx.mergeBig(); else sfx.merge();
   clearTimeout(mergeTimer); mergeTimer = setTimeout(hideMerge, 2200);
 }
 function hideMerge() { $('mergeFx').classList.remove('show'); }
 $('mergeFx').addEventListener('click', hideMerge);
+
+// 击败头目解锁新道具庆祝动画
+let unlockTimer = 0;
+function showUnlock(id) {
+  const el = $('unlockFx'), it = itemDef(id);
+  if (!el || !it) return;
+  el.innerHTML = `
+    <div class="mfbox">
+      <div class="mfrays"></div>
+      <div class="ttl">🎉 击败头目 · 解锁新道具！</div>
+      <img src="${ICONS.url[it.id]}" alt="">
+      <div class="un-name">${it.name}</div>
+      ${store.pinyin ? `<div class="un-py">${it.py}</div>` : ''}
+      <div class="un-desc">${it.desc}<br><b>商店价格：${it.cost} 🐟 / ${it.pack === 1 ? '个' : it.pack + '次'}</b></div>
+      <div class="sub">点击任意处继续</div>
+    </div>`;
+  el.classList.add('show');
+  sfx.unlock();
+  clearTimeout(unlockTimer);
+  unlockTimer = setTimeout(hideUnlock, 4200);
+}
+function hideUnlock() { $('unlockFx').classList.remove('show'); }
+$('unlockFx').addEventListener('click', hideUnlock);
 
 function shopAction(action, id) {
   if (action === 'buyW') { const w = weaponDef(id); if (pay(w.cost)) { G.inv[id][0]++; fixEquip(); } }
@@ -1442,13 +1850,18 @@ function shopAction(action, id) {
   }
   else if (action === 'mergeAll') { const top = mergeAll(); if (top) showMerge(top.id, top.from, top.to); }
   else if (action === 'buyI') {
+    if (!isItemUnlocked(id)) return;
     const it = itemDef(id), st = G.items[id];
     if (it.multi) {
       if (st.units.length < it.multi) { if (pay(it.cost)) st.units.push(it.pack); }
       else { const i = st.units.indexOf(Math.min(...st.units)); if (st.units[i] < ITEM_CAP && pay(it.cost)) st.units[i] = Math.min(ITEM_CAP, st.units[i] + it.pack); }
     } else if (st.uses < ITEM_CAP && pay(it.cost)) st.uses = Math.min(ITEM_CAP, st.uses + it.pack);
   }
-  else if (action === 'upI') { const it = itemDef(id), st = G.items[id]; if (st.lv < it.max && pay(itemUpCost(it, st.lv))) st.lv++; }
+  else if (action === 'upI') {
+    if (!isItemUnlocked(id)) return;
+    const it = itemDef(id), st = G.items[id];
+    if (st.lv < it.max && pay(itemUpCost(it, st.lv))) st.lv++;
+  }
   else if (action === 'stat') {
     const s = STATS.find(x => x.id === id), lv = G.stats[id];
     if (lv < s.max && pay(statCost(lv))) { G.stats[id]++; if (id === 'nestHp') G.nestHp += 100; }
@@ -1459,8 +1872,11 @@ function shopAction(action, id) {
 }
 
 // ---------- 按钮事件 ----------
+let confirmNewRun = false;
 function refreshToggles() {
+  const gInfo = GRADE_LEVELS.find(g => g.id === store.grade) || GRADE_LEVELS[0];
   for (const n of [1, 2]) {
+    if ($('tglGrade' + n)) $('tglGrade' + n).textContent = '题库：' + gInfo.short;
     $('tglPinyin' + n).textContent = '拼音：' + (store.pinyin ? '开' : '关');
     $('tglMute' + n).textContent = '声音：' + (store.mute ? '关' : '开');
   }
@@ -1468,6 +1884,7 @@ function refreshToggles() {
   const run = loadRun();
   $('btnContinue').style.display = run ? '' : 'none';
   if (run) $('btnContinue').textContent = `继续游戏（从第 ${run.level + 1} 关开始）`;
+  confirmNewRun = false;
   $('btnStart').textContent = run ? '开始新游戏' : '开始游戏';
   $('btnStart').className = run ? 'tgl' : 'big';
 }
@@ -1478,15 +1895,25 @@ document.addEventListener('click', e => {
   const a = b.dataset.action, id = b.dataset.id;
   switch (a) {
     case 'start':
-      if (state === 'menu' && loadRun() && !confirm('开始新游戏会覆盖已保存的进度，确定吗？')) break;
+      if (state === 'menu' && loadRun() && !confirmNewRun) {
+        confirmNewRun = true;
+        $('btnStart').textContent = '再点一次：确认覆盖旧进度';
+        break;
+      }
+      confirmNewRun = false;
       newGame(); break;
     case 'continue': continueGame(); break;
     case 'resume': resumeGame(); break;
-    case 'toMenu': G = null; L = null; setState('menu'); refreshToggles(); show('menu'); break;
+    case 'toMenu': G = null; L = null; camZoom = 1; setState('menu'); refreshToggles(); show('menu'); break;
+    case 'toggleGrade': store.grade = (store.grade + 1) % GRADE_LEVELS.length; save(); refreshToggles(); break;
     case 'togglePinyin': store.pinyin = !store.pinyin; save(); refreshToggles(); break;
     case 'toggleMute': store.mute = !store.mute; save(); refreshToggles(); break;
     case 'quizAns': answerQuiz(+b.dataset.i); break;
-    case 'quizDone': show(null); setState('playing'); break;
+    case 'quizDone': finishQuiz(); break;
+    case 'examAns': answerExam(+b.dataset.i); break;
+    case 'examNext': nextExam(); break;
+    case 'examRevive': reviveFromExam(); break;
+    case 'examFail': case 'examGiveUp': gameOver(exam ? exam.reason : '闯关失败'); break;
     case 'speak': speak(b.dataset.t); break;
     case 'mini': openMini(); break;
     case 'miniAns': answerMini(+b.dataset.i); break;
@@ -1504,17 +1931,16 @@ function ell(x, y, rx, ry, fill, stroke) {
   if (stroke) { ctx.strokeStyle = stroke; ctx.stroke(); }
 }
 const OUT = '#4a3423';
-
 function drawGround() {
-  ctx.fillStyle = '#5aa84e'; ctx.fillRect(cam.x - 50, cam.y - 50, W / scale + 100, H / scale + 100);
+  const effScale = scale * camZoom;
+  ctx.fillStyle = '#5aa84e'; ctx.fillRect(cam.x - 50, cam.y - 50, W / effScale + 100, H / effScale + 100);
   ctx.fillStyle = '#8fd16f'; ctx.fillRect(0, 0, WORLD.w, WORLD.h);
   ctx.fillStyle = '#86c966';
   for (let x = 0; x < WORLD.w; x += 100) for (let y = (x / 100 % 2) * 100; y < WORLD.h; y += 200) ctx.fillRect(x, y, 100, 100);
-  // 通向猫窝的小路
   ctx.fillStyle = '#e3cf9a';
   ell(NEST.x, NEST.y + 10, 120, 95, '#e3cf9a');
   for (const d of decor) {
-    if (d.x < cam.x - 20 || d.x > cam.x + W / scale + 20 || d.y < cam.y - 20 || d.y > cam.y + H / scale + 20) continue;
+    if (d.x < cam.x - 20 || d.x > cam.x + W / effScale + 20 || d.y < cam.y - 20 || d.y > cam.y + H / effScale + 20) continue;
     if (Math.hypot(d.x - NEST.x, d.y - NEST.y) < 130) continue;
     if (d.t === 'flower') {
       ctx.fillStyle = d.c;
@@ -1528,7 +1954,6 @@ function drawGround() {
   }
   ctx.strokeStyle = '#3f7d38'; ctx.lineWidth = 8; ctx.strokeRect(0, 0, WORLD.w, WORLD.h);
 }
-
 function drawFence() {
   if (!L || !ilv('fence')) return;
   ctx.strokeStyle = 'rgba(120,120,130,.8)'; ctx.lineWidth = 2;
@@ -1540,26 +1965,21 @@ function drawFence() {
     ctx.fillRect(x - 3, y - 12, 6, 16); ctx.strokeRect(x - 3, y - 12, 6, 16);
   }
 }
-
 function drawNest() {
   const x = NEST.x, y = NEST.y, flash = L && L.nestFlash > 0;
   ctx.lineWidth = 3; ctx.strokeStyle = OUT;
   ell(x, y + 34, 54, 14, 'rgba(0,0,0,.15)');
-  // 纸箱小屋
   ctx.fillStyle = flash ? '#ffd0c0' : '#d9a765';
   ctx.beginPath(); ctx.roundRect(x - 44, y - 18, 88, 54, 8); ctx.fill(); ctx.stroke();
   ctx.fillStyle = flash ? '#ffb0a0' : '#e8743b';
   ctx.beginPath(); ctx.moveTo(x - 56, y - 16); ctx.lineTo(x, y - 58); ctx.lineTo(x + 56, y - 16); ctx.closePath(); ctx.fill(); ctx.stroke();
   ctx.fillStyle = '#5b3d28';
   ctx.beginPath(); ctx.arc(x, y + 36, 19, Math.PI, 0); ctx.lineTo(x + 19, y + 36); ctx.lineTo(x - 19, y + 36); ctx.fill(); ctx.stroke();
-  // 软垫
   ell(x, y + 34, 15, 5, '#ffadc6');
-  // 牌子
   ctx.fillStyle = '#fff6df'; ctx.beginPath(); ctx.roundRect(x - 22, y - 12, 44, 20, 5); ctx.fill(); ctx.stroke();
   ctx.fillStyle = OUT; ctx.font = 'bold 14px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   ctx.fillText('猫窝', x, y - 1);
 }
-
 function drawTurret(t) {
   ctx.lineWidth = 2.5; ctx.strokeStyle = OUT;
   ell(t.x, t.y + 8, 14, 5, 'rgba(0,0,0,.15)');
@@ -1567,7 +1987,6 @@ function drawTurret(t) {
   ctx.fillStyle = '#8c98a8'; ctx.fillRect(4, -4, 18, 8); ctx.strokeRect(4, -4, 18, 8);
   ctx.restore();
   ell(t.x, t.y, 12, 12, '#ffd84a', OUT);
-  // 小猫耳朵
   ctx.fillStyle = '#ffd84a';
   for (const s of [-1, 1]) { ctx.beginPath(); ctx.moveTo(t.x + s * 4, t.y - 10); ctx.lineTo(t.x + s * 10, t.y - 18); ctx.lineTo(t.x + s * 11, t.y - 6); ctx.closePath(); ctx.fill(); ctx.stroke(); }
 }
@@ -1586,7 +2005,6 @@ function drawGadgets() {
     const nSh = ilv('shuriken');
     for (let i = 0; i < nSh; i++) {
       const a = L.shAngle + i * TAU / nSh, bx = NEST.x + Math.cos(a) * SHURIKEN_R, by = NEST.y + Math.sin(a) * SHURIKEN_R;
-      // 拖尾
       ctx.lineCap = 'round';
       for (let k = 0; k < 3; k++) {
         ctx.strokeStyle = `rgba(200,225,255,${0.5 - k * 0.15})`; ctx.lineWidth = 9 - k * 2.5;
@@ -1620,9 +2038,8 @@ function drawFish(f) {
   ctx.fillStyle = OUT; ctx.beginPath(); ctx.arc(-4, -1, 1, 0, TAU); ctx.fill();
   ctx.restore();
 }
-
 function drawDrop(d) {
-  if (d.life < 3 && Math.floor(d.life * 6) % 2) return;   // 快消失时闪烁
+  if (d.life < 3 && Math.floor(d.life * 6) % 2) return;
   const y = d.y + Math.sin(d.t * 4) * 3;
   ell(d.x, d.y + 17, 13, 4, 'rgba(0,0,0,.18)');
   ctx.lineWidth = 2; ctx.strokeStyle = 'rgba(255,255,255,.8)';
@@ -1631,18 +2048,37 @@ function drawDrop(d) {
   ell(d.x - 5, y - 6, 4, 2.5, 'rgba(255,255,255,.55)');
   outlined(d.buff.ch, d.x, y + 1, 17);
 }
-
 function drawCat(c) {
   const cheer = c.hop !== undefined;
   const face = cheer ? 1 : Math.cos(c.aim) < 0 ? -1 : 1;
   const bob = cheer ? c.hop : c.moving ? Math.sin(c.walk) * 2 : Math.sin(performance.now() / 400) * 0.8;
   const form = L.form && FORMS[L.form];
-  const S = c.s * (1 + 0.45 * Math.sin(Math.PI * L.morphT / 0.4));   // 变身瞬间鼓一下
-  for (const t of L.trail) {   // 残影
+  const S = c.s * (1 + 0.45 * Math.sin(Math.PI * L.morphT / 0.4));
+  for (const t of L.trail) {
     ctx.globalAlpha = t.life; ell(t.x, t.y + 18 - 12 * t.s, 14 * t.s, 12 * t.s, t.color); ell(t.x, t.y + 18 - 30 * t.s, 15 * t.s, 13 * t.s, t.color);
   }
-  ctx.globalAlpha = c.inv > 0 && Math.floor(c.inv * 20) % 2 ? 0.5 : 1;
+  ctx.globalAlpha = c.inv > 0 && L.redRageT <= 0 && Math.floor(c.inv * 20) % 2 ? 0.5 : 1;
   ctx.save(); ctx.translate(c.x, c.y + 18); ctx.scale(S, S); ctx.translate(-c.x, -(c.y + 18));
+
+  // 答对中文题后的 5 秒周身金光上升气焰与光环
+  if (L.redRageT > 0) {
+    const now = performance.now();
+    ctx.save();
+    ell(c.x, c.y - 4, 36 + Math.sin(now / 60) * 3, 38 + Math.cos(now / 60) * 3, 'rgba(255, 210, 60, 0.26)', 'rgba(255, 215, 80, 0.95)');
+    // 周身上升金光柱与气浪线条
+    ctx.lineCap = 'round';
+    for (let i = 0; i < 6; i++) {
+      const phase = ((now / 380 + i / 6) % 1);
+      const rx = c.x + Math.sin(i * 2.1 + now / 200) * 24;
+      const ry = c.y + 20 - phase * 62;
+      const len = 12 + (1 - phase) * 14;
+      ctx.strokeStyle = i % 2 ? `rgba(255, 215, 60, ${0.9 * (1 - phase)})` : `rgba(255, 245, 190, ${0.9 * (1 - phase)})`;
+      ctx.lineWidth = 3.5;
+      ctx.beginPath(); ctx.moveTo(rx, ry); ctx.lineTo(rx, ry - len); ctx.stroke();
+    }
+    ctx.restore();
+  }
+
   if (L.form === 'giant') { ctx.strokeStyle = 'rgba(255,216,74,.9)'; ctx.lineWidth = 2.5; ctx.beginPath(); ctx.arc(c.x, c.y - 4, 30 + Math.sin(performance.now() / 90) * 2, 0, TAU); ctx.stroke(); }
   ell(c.x, c.y + 18, 17, 5, 'rgba(0,0,0,.18)');
   if (L.catnipT > 0) { ctx.strokeStyle = 'rgba(156,255,107,.8)'; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(c.x, c.y, 27 + Math.sin(performance.now() / 80) * 2, 0, TAU); ctx.stroke(); }
@@ -1662,12 +2098,12 @@ function drawCat(c) {
   ctx.lineWidth = 2.5; ctx.strokeStyle = OUT;
   // 脚
   const step = c.moving ? Math.sin(c.walk) * 3 : 0;
-  ell(-6 + step, 16, 5, 3.5, '#fff', OUT); ell(6 - step, 16, 5, 3.5, '#fff', OUT);
+  ell(-6 + step, 16, 5, 3.5, L.redRageT > 0 ? '#ffd8d8' : '#fff', OUT); ell(6 - step, 16, 5, 3.5, L.redRageT > 0 ? '#ffd8d8' : '#fff', OUT);
   // 身体
   ell(0, 6, 13, 11, FUR, OUT);
-  ell(0, 9, 7, 6, '#fff');
+  ell(0, 9, 7, 6, L.redRageT > 0 ? '#ff9e9e' : '#fff');
   // 项圈和铃铛
-  ctx.strokeStyle = '#2bb5a0'; ctx.lineWidth = 4; ctx.beginPath(); ctx.moveTo(-10, -1); ctx.quadraticCurveTo(0, 4, 10, -1); ctx.stroke();
+  ctx.strokeStyle = L.redRageT > 0 ? '#ffe066' : '#2bb5a0'; ctx.lineWidth = 4; ctx.beginPath(); ctx.moveTo(-10, -1); ctx.quadraticCurveTo(0, 4, 10, -1); ctx.stroke();
   ctx.lineWidth = 1.5; ell(0, 3, 3, 3, '#ffd84a', OUT);
   ctx.lineWidth = 2.5; ctx.strokeStyle = OUT;
   // 耳朵
@@ -1681,14 +2117,15 @@ function drawCat(c) {
   ctx.strokeStyle = DARK; ctx.lineWidth = 2;
   ctx.beginPath(); ctx.moveTo(-3, -24); ctx.lineTo(-3, -20); ctx.moveTo(0, -25); ctx.lineTo(0, -20); ctx.moveTo(3, -24); ctx.lineTo(3, -20); ctx.stroke();
   // 脸
-  ell(3, -8, 7, 5, '#fff');
-  if (cheer) {   // 开心的眯眯眼
+  ell(3, -8, 7, 5, L.redRageT > 0 ? '#ffd8d8' : '#fff');
+  if (cheer) {
     ctx.strokeStyle = OUT; ctx.lineWidth = 2;
     ctx.beginPath(); ctx.arc(-2, -12, 2.6, Math.PI, 0); ctx.stroke();
     ctx.beginPath(); ctx.arc(9, -12, 2.6, Math.PI, 0); ctx.stroke();
   } else {
-    ctx.fillStyle = OUT; ctx.beginPath(); ctx.arc(-2, -13, 2.2, 0, TAU); ctx.arc(9, -13, 2.2, 0, TAU); ctx.fill();
-    if (L.form === 'giant' || L.form === 'power') {   // 变身后眼神更凶
+    ctx.fillStyle = L.redRageT > 0 ? '#ffe066' : OUT;
+    ctx.beginPath(); ctx.arc(-2, -13, 2.2, 0, TAU); ctx.arc(9, -13, 2.2, 0, TAU); ctx.fill();
+    if (L.form === 'giant' || L.form === 'power' || L.form === 'redRage') {
       ctx.strokeStyle = OUT; ctx.lineWidth = 2;
       ctx.beginPath(); ctx.moveTo(-6, -18); ctx.lineTo(0, -15.5); ctx.moveTo(13, -18); ctx.lineTo(7, -15.5); ctx.stroke();
     }
@@ -1696,16 +2133,16 @@ function drawCat(c) {
   ctx.fillStyle = '#ff8fa3'; ctx.beginPath(); ctx.moveTo(2, -9.5); ctx.lineTo(6, -9.5); ctx.lineTo(4, -7.5); ctx.closePath(); ctx.fill();
   ctx.strokeStyle = OUT; ctx.lineWidth = 1.2; ctx.beginPath(); ctx.moveTo(4, -7.5); ctx.quadraticCurveTo(2, -4.5, 0.5, -6.5); ctx.moveTo(4, -7.5); ctx.quadraticCurveTo(6, -4.5, 7.5, -6.5); ctx.stroke();
   ctx.restore();
-  // 枪：和商店图标是同一张图
+  // 枪
   const [gx, gy] = ICONS.grip[G.eq.id], gs = 0.62;
   ctx.save(); ctx.translate(c.x, c.y + 4 + bob); ctx.rotate(c.aim); ctx.scale(1, face);
-  if (G.eq.tier > 0) {   // 高阶武器带品级光晕
+  if (G.eq.tier > 0 || L.redRageT > 0) {
     const ga = ctx.globalAlpha; ctx.globalAlpha = ga * (0.28 + 0.1 * Math.sin(performance.now() / 160));
-    ell(22, 1, 18 + G.eq.tier * 1.5, 11 + G.eq.tier, tierColor(G.eq.tier)); ctx.globalAlpha = ga;
+    ell(22, 1, 18 + G.eq.tier * 1.5, 11 + G.eq.tier, L.redRageT > 0 ? '#ff2424' : tierColor(G.eq.tier)); ctx.globalAlpha = ga;
   }
   ctx.drawImage(ICONS.held[G.eq.id], 11 - gx * gs, 1 - gy * gs, 64 * gs, 64 * gs);
   ctx.lineWidth = 2; ctx.strokeStyle = OUT;
-  ell(11, 3, 4.5, 4, '#fff', OUT);   // 小爪子
+  ell(11, 3, 4.5, 4, '#fff', OUT);
   ctx.restore();
   ctx.restore();
   ctx.globalAlpha = 1;
@@ -1717,14 +2154,13 @@ function coneFill(o, a, len, fill, stroke, hs = 1) {
   ctx.closePath(); ctx.fillStyle = fill; ctx.fill();
   if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = 2; ctx.stroke(); }
 }
-// 巨龙的预警：陨石落点和火焰扇形
 function drawDragonTelegraph(e) {
   ctx.lineWidth = 2;
   for (const m of e.meteors) {
     const p = clamp(m.t / m.delay, 0, 1);
     ell(m.x, m.y, 74, 74, `rgba(230,60,40,${0.1 + 0.2 * p})`, 'rgba(230,60,40,.7)');
     ell(m.x, m.y, 74 * p, 74 * p, `rgba(255,120,40,${0.2 + 0.3 * p})`);
-    if (p > 0.35) {   // 从天而降的火球
+    if (p > 0.35) {
       const q = (p - 0.35) / 0.65, fy = m.y - (1 - q) * 320, fx = m.x - (1 - q) * 70;
       for (let k = 3; k >= 1; k--) ell(fx + k * 7, fy - k * 14, 12 - k * 2, 12 - k * 2, 'rgba(255,' + (120 + k * 30) + ',60,.35)');
       ell(fx, fy, 14, 14, '#ff9a3c', OUT); ell(fx - 3, fy - 3, 6, 6, '#ffe066');
@@ -1743,8 +2179,6 @@ function drawDragonTelegraph(e) {
     }
   }
 }
-
-// 头目攻击前的地面预警
 function drawTelegraph(e) {
   if (e.type !== 'boss') return;
   if (e.kind.special === 'dragon') return drawDragonTelegraph(e);
@@ -1762,7 +2196,6 @@ function drawTelegraph(e) {
     ctx.restore();
   }
 }
-// 根据头目当前的动作算出姿势，再交给 bosses.js 画
 function drawBossBody(e, fl) {
   const sp = e.kind.special, wind = e.st === 'wind', act = e.st === 'act';
   const wp = wind ? 1 - e.stT / e.stDur : 0;
@@ -1794,7 +2227,6 @@ function drawBossBody(e, fl) {
   ctx.scale(k * (1 + stretch * 0.14 + crouch * 0.08), k * (1 - crouch * 0.2 - stretch * 0.08));
   BOSS_ART.draw(ctx, e.kind.id, pose);
 }
-
 function polyFill(pts, fill, stroke = true) {
   ctx.beginPath(); ctx.moveTo(pts[0], pts[1]);
   for (let i = 2; i < pts.length; i += 2) ctx.lineTo(pts[i], pts[i + 1]);
@@ -1806,13 +2238,11 @@ function ellRot(x, y, rx, ry, rot, fill, stroke) {
   if (stroke) { ctx.strokeStyle = stroke; ctx.stroke(); }
 }
 
-// 强化过的敌人：画的时候把每个颜色混入强度色（蓝/紫/红）。
-// 用代理拦截 fillStyle / strokeStyle，这样不用改每一种敌人的画法，也不用额外的离屏画布
 const ctxReal = ctx;
 let tintRgb = null, tintAmt = 0;
 const tintCache = new Map();
 function tintColor(col) {
-  if (typeof col !== 'string' || col[0] !== '#' || col === '#fff' || col === '#ffffff') return col;   // 纯白（受击闪白、眼白）保持不变
+  if (typeof col !== 'string' || col[0] !== '#' || col === '#fff' || col === '#ffffff') return col;
   const key = col + tintRgb;
   let out = tintCache.get(key);
   if (out) return out;
@@ -1838,11 +2268,11 @@ function drawEnemyTinted(e) {
   ctx = ctxTinted;
   try { drawEnemyBody(e); } finally { ctx = ctxReal; tintRgb = null; }
 }
-
 function drawEnemyBody(e) {
   const wob = Math.sin(e.t * 10) * 1.5;
   const fly = e.type === 'crow' || e.type === 'bat';
-  ctx.save(); ctx.translate(e.x, e.y + (fly ? Math.sin(e.t * (e.type === 'bat' ? 9 : 5)) * 4 - 8 : wob * 0.4)); ctx.scale(e.face, 1);
+  const stunShake = e.stunT > 0 ? Math.sin(performance.now() / 25) * 3 : 0;
+  ctx.save(); ctx.translate(e.x + stunShake, e.y + (fly ? Math.sin(e.t * (e.type === 'bat' ? 9 : 5)) * 4 - 8 : wob * 0.4)); ctx.scale(e.face, 1);
   ctx.lineWidth = 2.5; ctx.strokeStyle = OUT; ctx.lineJoin = 'round'; ctx.lineCap = 'round';
   const fl = e.flash > 0;
   const r = e.r;
@@ -1864,7 +2294,6 @@ function drawEnemyBody(e) {
     ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(r - 2, -2.5, 1.5, 0, TAU); ctx.arc(r - 2, 2.5, 1.5, 0, TAU); ctx.fill();
   } else if (e.type === 'raccoon') {
     const c = fl ? '#fff' : '#8d8f96';
-    // 条纹尾巴
     ctx.lineWidth = 11; ctx.strokeStyle = OUT; ctx.beginPath(); ctx.moveTo(-r + 2, 6); ctx.quadraticCurveTo(-r - 16, 4, -r - 14, -12 + wob); ctx.stroke();
     ctx.lineWidth = 7; ctx.strokeStyle = c; ctx.stroke();
     ctx.setLineDash([4, 6]); ctx.strokeStyle = '#3d3f46'; ctx.stroke(); ctx.setLineDash([]);
@@ -1874,7 +2303,6 @@ function drawEnemyBody(e) {
     ctx.fillStyle = '#3d3f46'; ctx.beginPath(); ctx.ellipse(3, -4, r * 0.8, 5.5, 0, 0, TAU); ctx.fill();
     ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(-3, -4, 2.5, 0, TAU); ctx.arc(9, -4, 2.5, 0, TAU); ctx.fill();
     ell(4, 5, 6, 4.5, '#e8e8ec'); ell(6, 3.5, 2.2, 1.8, OUT);
-    // 小布袋
     ell(-r + 3, 8, 6, 7, '#d9a765', OUT);
   } else if (e.type === 'crow') {
     const c = fl ? '#fff' : '#3a3d52';
@@ -1970,17 +2398,14 @@ function drawEnemyBody(e) {
     const dash = e.t % 4 > 3;
     ctx.lineWidth = 4; ctx.beginPath(); ctx.moveTo(-r, 6); ctx.quadraticCurveTo(-r - 18, 12 + wob, -r - 22, -6); ctx.strokeStyle = '#e59aa0'; ctx.stroke();
     ctx.lineWidth = 3; ctx.strokeStyle = OUT;
-    // 小披风
     ctx.fillStyle = '#c8402d'; ctx.beginPath(); ctx.moveTo(-8, -6); ctx.lineTo(-r - 8, 4 + wob); ctx.lineTo(-r - 2, 16); ctx.lineTo(-4, 12); ctx.closePath(); ctx.fill(); ctx.stroke();
     ell(-12, -r + 6, 9, 9, c, OUT); ell(-12, -r + 6, 4.5, 4.5, '#f5b8bd');
     ell(0, 2, r, r * 0.85, c, OUT);
     ell(4, 9, 11, 8, '#e9dccb');
-    // 铁桶头盔
     ctx.fillStyle = fl ? '#fff' : '#9aa7b5';
     ctx.beginPath(); ctx.moveTo(-10, -8); ctx.lineTo(-7, -r - 10); ctx.lineTo(19, -r - 10); ctx.lineTo(22, -8); ctx.closePath(); ctx.fill(); ctx.stroke();
     ctx.beginPath(); ctx.moveTo(-12, -8); ctx.lineTo(24, -8); ctx.stroke();
     ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(6, -r - 10, 9, Math.PI, 0); ctx.stroke(); ctx.lineWidth = 3;
-    // 凶凶的眼睛
     ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(10, -1, 4, 0, TAU); ctx.fill();
     ctx.fillStyle = dash ? '#c8402d' : OUT; ctx.beginPath(); ctx.arc(11, -1, 2, 0, TAU); ctx.fill();
     ctx.beginPath(); ctx.moveTo(4, -7); ctx.lineTo(16, -3); ctx.stroke();
@@ -1989,26 +2414,30 @@ function drawEnemyBody(e) {
   }
   ctx.restore();
 }
-
 function drawEnemy(e) {
   const r = e.r, T = ETIERS[e.tier || 0];
   ell(e.x, e.y + r * 0.9, r * 0.9, r * 0.3, 'rgba(0,0,0,.18)');
-  if (e.tier >= 2) {   // 精英和狂暴的敌人脚下有光晕
+  if (e.tier >= 2) {
     const ga = ctx.globalAlpha; ctx.globalAlpha = ga * (0.22 + 0.08 * Math.sin(performance.now() / 180 + e.seed));
     ell(e.x, e.y + r * 0.25, r * 1.45, r * 1.2, T.tint); ctx.globalAlpha = ga;
   }
-  if (e.mode === 'wind') {   // 野猪蓄力：地上显示冲撞路线
+  if (e.mode === 'wind') {
     ctx.save(); ctx.translate(e.x, e.y); ctx.rotate(e.dir);
     ctx.fillStyle = `rgba(230,60,40,${0.12 + 0.2 * (1 - e.mt / 0.7)})`; ctx.fillRect(0, -r * 0.8, 380, r * 1.6);
     ctx.restore();
   }
   if (e.tier > 0 && T.tint) drawEnemyTinted(e); else drawEnemyBody(e);
-  // 冰冻效果
   if (L.buffT.freeze > 0) {
     ctx.lineWidth = 2;
     ell(e.x, e.y - (e.type === 'boss' ? 8 : 0) - (e.z || 0), r * 1.25, r * 1.25, 'rgba(160,230,255,.45)', 'rgba(255,255,255,.9)');
   }
-  // 血条
+  if (e.stunT > 0) {
+    const a0 = performance.now() / 150;
+    for (let k = 0; k < 2; k++) {
+      const a = a0 + k * Math.PI;
+      drawStar(e.x + Math.cos(a) * (r * 0.65), e.y - r - 10 + Math.sin(a) * 4, 4.5, '#ffe066', OUT, 1.5);
+    }
+  }
   const big = e.type === 'boss' || e.type === 'elite';
   let top = e.y - r - 14;
   if (e.hp < e.maxHp || big || e.tier > 0) {
@@ -2019,9 +2448,7 @@ function drawEnemy(e) {
     ctx.fillStyle = OUT; ctx.fillRect(e.x - bw / 2 - 1, by - 1, bw + 2, 6);
     ctx.fillStyle = big ? '#c8402d' : T.bar; ctx.fillRect(e.x - bw / 2, by, bw * clamp(e.hp / e.maxHp, 0, 1), 4);
   }
-  // 强度星星：几颗星就是第几档
   for (let i = 0; i < e.tier; i++) drawStar(e.x + (i - (e.tier - 1) / 2) * 12, top - 9, 5.5, T.bar, OUT, 1.5);
-  // 追猫的敌人头上有红色准星
   if (e.hunter && !big) {
     const mx = e.x, my = top - (e.tier > 0 ? 24 : 11);
     ctx.lineCap = 'round';
@@ -2033,13 +2460,11 @@ function drawEnemy(e) {
   }
   if (e.mode === 'wind') outlined('!', e.x, top - (e.hunter ? 30 : 16), 22, '#ff3b2f');
 }
-
 function flashStar(x, y, r, color) {
   ctx.fillStyle = color; ctx.beginPath();
   for (let i = 0; i < 16; i++) { const a = i * TAU / 16, rr = i % 2 ? r * 0.38 : r; ctx.lineTo(x + Math.cos(a) * rr, y + Math.sin(a) * rr); }
   ctx.closePath(); ctx.fill();
 }
-// 五角星：结算画面的星级用它
 function drawStar(x, y, R, fill, stroke, lw = 3, rot = 0) {
   ctx.beginPath();
   for (let i = 0; i < 10; i++) { const a = -Math.PI / 2 + rot + i * Math.PI / 5, r = i % 2 ? R * 0.48 : R; ctx.lineTo(x + Math.cos(a) * r, y + Math.sin(a) * r); }
@@ -2055,7 +2480,6 @@ function drawTierBadge(x, yMid, t) {
   ctx.font = 'bold 12px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(0,0,0,.45)';
   ctx.strokeText(label, x + w / 2, yMid + 1); ctx.fillStyle = '#fff'; ctx.fillText(label, x + w / 2, yMid + 1);
 }
-
 function drawBullet(b) {
   if (b.tier > 0) { const ga = ctx.globalAlpha; ctx.globalAlpha = ga * 0.35; ell(b.x, b.y, b.r * 2.4 + b.tier, b.r * 2.4 + b.tier, tierColor(b.tier)); ctx.globalAlpha = ga; }
   ctx.lineWidth = 1.5; ctx.strokeStyle = OUT;
@@ -2092,8 +2516,6 @@ function outlined(text, x, y, size, color = '#fff', align = 'center') {
   ctx.lineWidth = Math.max(3, size / 5); ctx.strokeStyle = OUT; ctx.lineJoin = 'round';
   ctx.strokeText(text, x, y); ctx.fillStyle = color; ctx.fillText(text, x, y);
 }
-
-// 道具栏：图片 + 剩余次数。只在内容变化时才改 DOM
 function updateItemBar() {
   const eq = G.eq, w = ibEls.weapon, wsig = eq.id + ':' + eq.tier;
   if (w.sig !== wsig) {
@@ -2102,9 +2524,11 @@ function updateItemBar() {
     w.el.querySelector('.tierb').innerHTML = tierBadge(eq.tier);
   }
   for (const it of ITEMS) {
-    const x = ibEls[it.id], st = G.items[it.id], on = L.on[it.id] || 0, cool = it.manual ? Math.ceil(Math.max(0, L.catnipT)) : 0;
+    const x = ibEls[it.id], st = G.items[it.id], on = L.on[it.id] || 0;
+    const unlocked = isItemUnlocked(it.id);
+    const cool = it.id === 'catnip' ? Math.ceil(Math.max(0, L.catnipT)) : it.id === 'shockwave' ? Math.ceil(Math.max(0, L.shockwaveCd)) : 0;
     const left = itemLeft(it.id);
-    const show = it.manual ? (st.uses > 0 || cool > 0) : on > 0;
+    const show = unlocked && (it.manual ? (st.uses > 0 || cool > 0) : on > 0);
     const sig = `${show}|${left}|${on}|${cool}`;
     if (x.sig === sig) continue;
     x.sig = sig;
@@ -2119,6 +2543,14 @@ function updateItemBar() {
 }
 
 function drawHUD() {
+  // 答对中文题后的慢镜头特写边缘金光氛围晕影
+  if (L && L.redRageT > 0 && state === 'playing') {
+    const g = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.28, W / 2, H / 2, Math.max(W, H) * 0.72);
+    g.addColorStop(0, 'rgba(255, 0, 0, 0)');
+    g.addColorStop(1, `rgba(255, 190, 40, ${0.26 + 0.08 * Math.sin(performance.now() / 80)})`);
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, H);
+  }
   const bw = Math.min(150, W * 0.34);
   hudBar(8, 8, bw, '猫咪', L.cat.hp, catMaxHp(), '#ff7a8a');
   hudBar(8, 30, bw, '猫窝', G.nestHp, nestMaxHp(), '#ffb347');
@@ -2128,7 +2560,6 @@ function drawHUD() {
   if (L.time > 0) outlined(`${Math.ceil(L.time)} 秒`, cx, 42, 22, L.time <= 10 ? '#ffe066' : '#fff', al);
   else outlined(L.boss ? '打败头目！' : '过关！', cx, 42, 20, L.boss ? '#ff9a8a' : '#c9ff9e', al);
   outlined(`🐟 ${G.fish}`, narrow ? W - 58 : W - 60, narrow ? 68 : 28, 18, '#ffe9a8', 'right');
-  // 武器与增益
   const w = weaponDef(G.eq.id);
   let y = 66;
   ctx.drawImage(ICONS.canvas[w.id], 8, y - 15, 30, 30);
@@ -2136,6 +2567,10 @@ function drawHUD() {
   drawTierBadge(42 + ctx.measureText(w.name).width + 8, y, G.eq.tier);
   y += 28;
   if (L.atkBuff > 0) { outlined(`攻击力 +${Math.round(L.atkBuff * 100)}%`, 10, y, 14, '#ffe066', 'left'); y += 24; }
+  if (L.redRageT > 0) {
+    outlined(`✨ 金光觉醒 ${L.redRageT.toFixed(1)}秒`, 10, y, 15, '#ffe066', 'left');
+    y += 26;
+  }
   for (const b of BUFFS) {
     const t = L.buffT[b.id];
     if (!(t > 0)) continue;
@@ -2150,13 +2585,13 @@ function drawHUD() {
   if (L.banner > 0 && state !== 'clear') {
     ctx.globalAlpha = clamp(L.banner, 0, 1);
     outlined(`第 ${G.level} 关`, W / 2, H * 0.3, 46, '#ffe066');
-    outlined(L.isBoss ? '头目关！准备回答问题' : '保卫猫窝！', W / 2, H * 0.3 + 44, 20);
+    outlined(L.isBoss ? '头目关！头目将在关卡最后登场' : '保卫猫窝！', W / 2, H * 0.3 + 44, 20);
     ctx.globalAlpha = 1;
   }
-  // 头目方向提示
+  const effScale = scale * camZoom;
   if (state !== 'clear') for (const e of L.enemies) {
     if (e.type !== 'boss' && e.type !== 'elite') continue;
-    const sx = (e.x - cam.x) * scale, sy = (e.y - cam.y) * scale;
+    const sx = (e.x - cam.x) * effScale, sy = (e.y - cam.y) * effScale;
     if (sx < 0 || sx > W || sy < 0 || sy > H) {
       const a = Math.atan2(sy - H / 2, sx - W / 2);
       const px = clamp(W / 2 + Math.cos(a) * W, 36, W - 36), py = clamp(H / 2 + Math.sin(a) * H, 90, H - 30);
@@ -2168,7 +2603,6 @@ function drawHUD() {
     const nw = ctx.measureText(L.notice.text).width, nz = Math.floor(26 * Math.min(1, (W - 24) / nw));
     ctx.globalAlpha = clamp(L.notice.t, 0, 1); outlined(L.notice.text, W / 2, H * 0.24, nz, L.notice.color || '#ff9a8a'); ctx.globalAlpha = 1;
   }
-  // 过关庆祝：标题 → 三颗星依次出现 → 受伤情况和奖励
   if (state === 'clear') {
     const t = L.clearT, k = Math.min(1, t / 0.35), pop = 1 + 0.35 * Math.sin(k * Math.PI) * (1 - k * 0.3);
     const lay = clearLayout(), u = lay.u, cx = W / 2;
@@ -2186,16 +2620,15 @@ function drawHUD() {
       }
     }
     const tInfo = STAR_T0 + 3 * STAR_GAP;
-    if (t > 1.0) { ctx.globalAlpha = clamp((t - 1.0) * 3, 0, 1); outlined(`猫咪受伤 ${Math.round(G.lastCatLoss * 100)}%　猫窝受伤 ${Math.round(G.lastNestLoss * 100)}%`, cx, lay.y0 + 188 * u, 16 * u, '#fff'); ctx.globalAlpha = 1; }
+    if (t > 1.0) { ctx.globalAlpha = clamp((t - 1.0) * 3, 0, 1); outlined(`猫咪受伤 ${Math.round(G.lastCatLoss * 100)}%  猫窝受伤 ${Math.round(G.lastNestLoss * 100)}%`, cx, lay.y0 + 188 * u, 16 * u, '#fff'); ctx.globalAlpha = 1; }
     if (t > tInfo - 0.2) {
       ctx.globalAlpha = clamp((t - tInfo + 0.2) * 3, 0, 1);
       outlined(['', '再稳一点就能拿更多星！', '不错！', '完美！'][G.lastStars], cx, lay.y0 + 216 * u, 22 * u, G.lastStars === 3 ? '#ffe066' : '#fff');
-      outlined(`过关奖励 +${G.lastBonus} 🐟${G.lastStarBonus ? `　星级奖励 +${G.lastStarBonus} 🐟` : ''}`, cx, lay.y0 + 244 * u, 17 * u, '#ffe9a8');
+      outlined(`过关奖励 +${G.lastBonus} 🐟${G.lastStarBonus ? `  星级奖励 +${G.lastStarBonus} 🐟` : ''}`, cx, lay.y0 + 244 * u, 17 * u, '#ffe9a8');
       ctx.globalAlpha = 1;
     }
     if (t > STARS_DONE) { ctx.globalAlpha = 0.6 + 0.4 * Math.sin(t * 6); outlined('点击屏幕继续', cx, H * 0.86, 15, '#fff'); ctx.globalAlpha = 1; }
   }
-  // 摇杆
   if (joy.active) {
     ctx.globalAlpha = 0.5;
     ell(joy.sx, joy.sy, 50, 50, 'rgba(255,255,255,.25)', '#fff');
@@ -2207,14 +2640,15 @@ function drawHUD() {
 function render() {
   const dpr = canvas._dpr;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  const vw = W / scale, vh = H / scale;
+  const effScale = scale * camZoom;
+  const vw = W / effScale, vh = H / effScale;
   const focus = L ? L.cat : NEST;
   cam.x = vw >= WORLD.w ? (WORLD.w - vw) / 2 : clamp(focus.x - vw / 2, 0, WORLD.w - vw);
   cam.y = vh >= WORLD.h ? (WORLD.h - vh) / 2 : clamp(focus.y - vh / 2, 0, WORLD.h - vh);
   let shx = 0, shy = 0;
   if (L && L.shake > 0 && state === 'playing') { shx = rand(-4, 4); shy = rand(-4, 4); }
   ctx.save();
-  ctx.scale(scale, scale); ctx.translate(-cam.x + shx, -cam.y + shy);
+  ctx.scale(effScale, effScale); ctx.translate(-cam.x + shx, -cam.y + shy);
   drawGround();
   drawFence();
   if (!L) { drawNest(); ctx.restore(); return; }
@@ -2230,7 +2664,6 @@ function render() {
   ctx.globalAlpha = 1;
   for (const f of L.fish) drawFish(f);
   for (const d of L.drops) drawDrop(d);
-  // 按 y 排序，产生前后遮挡
   const objs = [{ y: NEST.y + 30, draw: drawNest }, { y: L.cat.y, draw: () => drawCat(L.cat) }];
   for (const t of L.turrets) objs.push({ y: t.y, draw: () => drawTurret(t) });
   for (const e of L.enemies) objs.push({ y: e.y, draw: () => drawEnemy(e) });
@@ -2251,6 +2684,11 @@ function render() {
     } else if (p.k === 'spark') {
       ctx.globalAlpha = clamp(p.life * 6, 0, 1); ctx.strokeStyle = p.color; ctx.lineWidth = p.r; ctx.lineCap = 'round';
       ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(p.x - p.vx * 0.05, p.y - p.vy * 0.05); ctx.stroke();
+    } else if (p.k === 'redbeam') {
+      ctx.globalAlpha = clamp(p.life / (p.max || 0.7), 0, 1) * 0.85;
+      ctx.strokeStyle = p.color; ctx.lineWidth = p.r * 0.7; ctx.lineCap = 'round';
+      ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(p.x, p.y + 18); ctx.stroke();
+      ell(p.x, p.y, p.r * 0.6, p.r * 0.6, '#fff7b0');
     } else if (p.k === 'flash') {
       const q = p.life / p.max; ctx.globalAlpha = clamp(q * 1.5, 0, 1);
       flashStar(p.x, p.y, p.r * (1.3 - 0.5 * q), p.color);
@@ -2281,5 +2719,5 @@ setState('menu');
 requestAnimationFrame(frame);
 
 // 调试接口
-window.__cat = { get G() { return G; }, get L() { return L; }, get state() { return state; }, set auto(v) { touchMode = v; }, update, startLevel, applyBuff, levelClear, rateLevel, weaponStats, mergeAll, ilv, spawnEnemy };
+window.__cat = { get G() { return G; }, get L() { return L; }, get state() { return state; }, get exam() { return exam; }, set auto(v) { touchMode = v; }, update, startLevel, applyBuff, levelClear, rateLevel, weaponStats, mergeAll, ilv, spawnEnemy, useShockwave, triggerRedRage, openReviveExam, showUnlock };
 })();

@@ -52,6 +52,12 @@ const SFX = (() => {
     shoot_laser: [0, () => { tone(2400, 0.24, { type: 'sawtooth', to: 280, vol: 0.12 }); tone(1200, 0.24, { to: 140, vol: 0.06 }); noise(0.1, { freq: 6000, type: 'highpass', vol: 0.06 }); }],
     boom: [60, () => { noise(0.55, { freq: 1000, to: 70, vol: 0.75 }); tone(95, 0.5, { type: 'sine', to: 28, vol: 0.65 }); noise(0.08, { freq: 4000, type: 'highpass', vol: 0.25 }); }],
     // 道具
+    shockwave: [0, () => {
+      tone(140, 0.7, { type: 'sine', to: 28, vol: 0.8 });
+      tone(420, 0.55, { type: 'sawtooth', to: 65, vol: 0.38 });
+      noise(0.65, { freq: 2800, to: 140, type: 'bandpass', q: 0.9, vol: 0.7 });
+      arp([880, 1175, 1568], 0.05, { type: 'triangle', vol: 0.16, dur: 0.18 });
+    }],
     turret: [60, () => { tone(1300, 0.06, { type: 'triangle', to: 600, vol: 0.09 }); noise(0.03, { freq: 4000, type: 'highpass', vol: 0.06 }); }],
     helper: [70, () => tone(1700, 0.05, { to: 900, vol: 0.05 })],
     shuriken: [70, () => { tone(2500, 0.08, { type: 'triangle', to: 3400, vol: 0.08 }); noise(0.06, { freq: 6000, type: 'highpass', vol: 0.14 }); }],
@@ -59,6 +65,16 @@ const SFX = (() => {
     catnip: [0, () => arp([660, 880, 1100, 1320, 1760], 0.05, { type: 'triangle', vol: 0.12, dur: 0.1 })],
     switch: [0, () => { tone(420, 0.03, { vol: 0.09 }); noise(0.04, { freq: 3500, type: 'highpass', vol: 0.14, delay: 0.04 }); tone(700, 0.04, { vol: 0.07, delay: 0.05 }); }],
     transform: [0, () => { tone(180, 0.4, { type: 'sawtooth', to: 1400, vol: 0.13 }); noise(0.4, { freq: 400, to: 5000, type: 'bandpass', vol: 0.2 }); arp([523, 659, 784, 1047, 1319], 0.06, { type: 'triangle', vol: 0.13, dur: 0.16 }); }],
+    redPowerup: [0, () => {
+      tone(110, 0.85, { type: 'sawtooth', to: 880, vol: 0.26 });
+      noise(0.75, { freq: 300, to: 4200, type: 'bandpass', vol: 0.32 });
+      arp([523, 659, 784, 1047, 1319, 1568], 0.07, { type: 'triangle', vol: 0.18, dur: 0.22 });
+    }],
+    unlock: [0, () => {
+      arp([523, 659, 784, 1047, 1319, 1568, 2093], 0.075, { type: 'triangle', vol: 0.18, dur: 0.22 });
+      tone(130, 0.55, { type: 'sine', to: 45, vol: 0.35 });
+      noise(0.65, { freq: 3500, type: 'highpass', vol: 0.1, delay: 0.12 });
+    }],
     revert: [0, () => tone(900, 0.25, { type: 'triangle', to: 250, vol: 0.09 })],
     stompCat: [120, () => { tone(110, 0.18, { type: 'sine', to: 40, vol: 0.4 }); noise(0.1, { freq: 500, vol: 0.25 }); }],
     // 战斗反馈

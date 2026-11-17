@@ -85,18 +85,44 @@ const ICONS = (() => {
     // 激光逗猫笔：一支笔射出红色激光
     laser(held) {
       if (!held) {
-      line([34, 30, 57, 12], '#ffb0b0', 6);
-      line([34, 30, 57, 12], '#ff4040', 2.5);
-      c.save(); c.strokeStyle = '#ff4040'; c.lineWidth = 2;
-      for (let i = 0; i < 6; i++) { const a = i * TAU / 6; c.beginPath(); c.moveTo(57 + Math.cos(a) * 3, 12 + Math.sin(a) * 3); c.lineTo(57 + Math.cos(a) * 6.5, 12 + Math.sin(a) * 6.5); c.stroke(); }
-      c.restore();
-      circ(57, 12, 2.5, '#ff4040', false);
+        line([34, 30, 57, 12], '#ffb0b0', 6);
+        line([34, 30, 57, 12], '#ff4040', 2.5);
+        c.save(); c.strokeStyle = '#ff4040'; c.lineWidth = 2;
+        for (let i = 0; i < 6; i++) { const a = i * TAU / 6; c.beginPath(); c.moveTo(57 + Math.cos(a) * 3, 12 + Math.sin(a) * 3); c.lineTo(57 + Math.cos(a) * 6.5, 12 + Math.sin(a) * 6.5); c.stroke(); }
+        c.restore();
+        circ(57, 12, 2.5, '#ff4040', false);
       }
       if (held) c.translate(22, 32); else { c.translate(22, 40); c.rotate(-0.66); }
       rr(-18, -5.5, 32, 11, 5.5, '#465264');
       rr(12, -4, 7, 8, 2, '#c9ced6');
       rr(-18, -5.5, 8, 11, 4, '#2bb5a0');
       circ(1, -1, 2.6, '#ff4040');
+    },
+    // 冲击波：中心能量核向外扩散多层环形气浪与四向击退箭头
+    shockwave() {
+      c.save();
+      c.strokeStyle = '#4fc3ff'; c.lineWidth = 3.5;
+      c.beginPath(); c.arc(32, 32, 25, -0.35, 1.15); c.stroke();
+      c.beginPath(); c.arc(32, 32, 25, 1.5, 2.8); c.stroke();
+      c.beginPath(); c.arc(32, 32, 25, 3.1, 4.65); c.stroke();
+      c.beginPath(); c.arc(32, 32, 25, 5.0, 5.75); c.stroke();
+      c.strokeStyle = '#9be7ff'; c.lineWidth = 2.5;
+      c.beginPath(); c.arc(32, 32, 18, 0, TAU); c.stroke();
+      c.restore();
+      // 四向震退箭头
+      for (let i = 0; i < 4; i++) {
+        c.save(); c.translate(32, 32); c.rotate(i * Math.PI / 2 + Math.PI / 4);
+        poly([15, -4, 27, 0, 15, 4], '#ffb347');
+        c.restore();
+      }
+      // 能量核心星芒
+      const pts = [];
+      for (let i = 0; i < 8; i++) {
+        const a = i * TAU / 8, r = i % 2 ? 6.5 : 13.5;
+        pts.push(32 + Math.cos(a) * r, 32 + Math.sin(a) * r);
+      }
+      poly(pts, '#ffe066');
+      circ(32, 32, 5, '#fff', false);
     },
     // 猫薄荷：一枝带小花的绿叶
     catnip() {
