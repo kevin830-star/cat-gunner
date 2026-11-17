@@ -349,7 +349,7 @@ function startLevel() {
     // 每个关卡开始，猫的生命值回满
     cat: { x: NEST.x, y: NEST.y + 95, r: 17, hp: fullCatHp, cd: 0, inv: 0, aim: 0, walk: 0, moving: false, kx: 0, ky: 0, s: 1 },
     enemies: [], bullets: [], ebullets: [], fish: [], parts: [], texts: [], turrets: [],
-    atkBuff: 0, catnipT: 0, catnipCd: 0, shockwaveCd: 0, missileUsed: false, redRageT: 0, reviveUsed: false,
+    atkBuff: 0, catnipT: 0, catnipCd: 0, shockwaveCd: 0, missileLeft: missileBase(), redRageT: 0, reviveUsed: false,
     catLost: 0, nestLost: 0, catMax: fullCatHp, nestMax: nestMaxHp(), on: {}, starsSnd: 3,
     boss: null, bossSpawned: false, bossHalfAsked: false, isBoss: isBossLevel(G.level),
     shake: 0, banner: 2.2, nestFlash: 0,
@@ -464,12 +464,14 @@ function useShockwave() {
   }
 }
 
-// 导弹防御：猫窝 3 级起每关一次，从猫窝向四面八方发射导弹，碰到第一个敌人就爆炸（范围伤害）
+// 导弹防御：猫窝 3 级起解锁，每升 3 级每关多一次（3 级 1 次、6 级 2 次、9 级 3 次……）；
+// 考试复活再送一次。从猫窝向四面八方发射导弹，碰到第一个敌人就爆炸（范围伤害）
+function missileBase() { return G ? Math.floor(G.stats.nestHp / 3) : 0; }
 function fireMissiles() {
-  if (!G || G.stats.nestHp < 3) return toast('猫窝升到 3 级后解锁导弹防御');
-  if (L.missileUsed) return toast('导弹防御每关只能用一次');
-  L.missileUsed = true;
-  const lv = G.stats.nestHp, n = Math.min(36, 16 + 2 * (lv - 3)), dmg = (60 + 12 * G.level) * (1 + 0.15 * (lv - 3));
+  if (!G || !L) return;
+  if (L.missileLeft <= 0) return toast(G.stats.nestHp < 3 ? '猫窝升到 3 级后解锁导弹防御' : '本关导弹防御已经用完了');
+  L.missileLeft--;
+  const lv = Math.max(3, G.stats.nestHp), n = Math.min(36, 16 + 2 * (lv - 3)), dmg = (60 + 12 * G.level) * (1 + 0.15 * (lv - 3));
   for (let i = 0; i < n; i++) {
     const a = i * TAU / n + rand(-0.04, 0.04), sp = rand(360, 420);
     L.bullets.push({ x: NEST.x + Math.cos(a) * 46, y: NEST.y - 20 + Math.sin(a) * 36, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp,
@@ -1664,16 +1666,29 @@ function nextExam() {
   }
 }
 
+const NEST_WIPE_R = 380;
 function reviveFromExam() {
   if (!L) return;
   L.reviveUsed = true;
   L.cat.hp = catMaxHp();
   L.cat.inv = 3.5;
-  if (G.nestHp <= 0) G.nestHp = Math.max(150, Math.round(nestMaxHp() * 0.6));
+  G.nestHp = nestMaxHp();   // 猫和猫窝都满血
   L.ebullets = [];
-  // 震退猫和猫窝周围的敌人，给复活留出安全空间
+  L.missileLeft++;          // 导弹防御多一次
+  // 猫窝附近的敌人全部消灭（头目只受重创），猫身边的敌人被震退
+  let wiped = 0;
   for (const e of L.enemies) {
-    if (dist(e, L.cat) < 280 || dist(e, NEST) < 260) {
+    if (e.dead || dist(e, NEST) >= NEST_WIPE_R) continue;
+    if (e.type === 'boss') { damageEnemy(e, Math.min(e.hp - 1, e.maxHp * 0.3)); e.stunT = 1.5; }
+    else { damageEnemy(e, e.hp + 1); wiped++; }
+  }
+  ring(NEST.x, NEST.y, NEST_WIPE_R, '#ffe066', 0.7, true);
+  ring(NEST.x, NEST.y, NEST_WIPE_R * 0.6, '#ffffff', 0.5, false);
+  burst(NEST.x, NEST.y - 20, '#ffe066', 30, 320);
+  if (wiped) addText(NEST.x, NEST.y - 90, `💥 猫窝附近 ${wiped} 个敌人被团灭！`, '#ffe066', 18, 2.2);
+  for (const e of L.enemies) {
+    if (e.dead) continue;
+    if (dist(e, L.cat) < 280) {
       const a = Math.atan2(e.y - NEST.y, e.x - NEST.x);
       e.shockDist = 320;
       e.shockAngle = a;
@@ -1682,8 +1697,8 @@ function reviveFromExam() {
   }
   ring(L.cat.x, L.cat.y, 180, '#7ed957', 0.6, true);
   burst(L.cat.x, L.cat.y, '#ffe066', 26, 260);
-  addText(L.cat.x, L.cat.y - 44, '🎉 考试通过！满血复活！', '#9cff6b', 20, 2.0);
-  announce('考试通过，满血复活');
+  addText(L.cat.x, L.cat.y - 44, '🎉 考试通过！满血复活！导弹 +1', '#9cff6b', 20, 2.0);
+  announce('考试通过，猫咪和猫窝满血复活，导弹防御加一次');
   sfx.transform();
   show(null);
   setState('playing');
@@ -1885,7 +1900,7 @@ function renderShop() {
   for (const s of STATS) {
     const lv = G.stats[s.id], c = statCost(lv);
     const btns = lv < s.max ? btn('stat', s.id, `强化 ${c} 🐟`, fish >= c) : btn('', '', '已满级', false);
-    const look = s.id === 'catHp' ? `　造型：${catLookName(lv)}` : s.id === 'nestHp' ? `　造型：${nestLookName(lv)}${lv >= 3 ? ' · 导弹防御 ✓' : ''}` : '';
+    const look = s.id === 'catHp' ? `　造型：${catLookName(lv)}` : s.id === 'nestHp' ? `　造型：${nestLookName(lv)}${lv >= 3 ? ` · 导弹防御每关 ${Math.floor(lv / 3)} 次` : ''}` : '';
     h += card({ icon: s.id, name: s.name, py: s.py, desc: s.desc, lv: `等级 ${lv}${Number.isFinite(s.max) ? '/' + s.max : ''}${look}`, btns });
   }
   const hurt = G.nestHp < nestMaxHp();
@@ -2720,11 +2735,11 @@ function outlined(text, x, y, size, color = '#fff', align = 'center') {
   ctx.strokeText(text, x, y); ctx.fillStyle = color; ctx.fillText(text, x, y);
 }
 function updateItemBar() {
-  const ms = ibEls.missile, mOk = G.stats.nestHp >= 3, msig = `${mOk}|${L.missileUsed}`;
+  const ms = ibEls.missile, mLeft = L.missileLeft, mOk = G.stats.nestHp >= 3 || mLeft > 0, msig = `${mOk}|${mLeft}`;
   if (ms.sig !== msig) {
     ms.sig = msig; ms.el.style.display = mOk ? '' : 'none';
-    const ct = ms.el.querySelector('.ct'); ct.textContent = L.missileUsed ? '×0' : '×1'; ct.classList.toggle('zero', L.missileUsed);
-    ms.el.classList.toggle('cooling', L.missileUsed);
+    const ct = ms.el.querySelector('.ct'); ct.textContent = '×' + mLeft; ct.classList.toggle('zero', mLeft <= 0);
+    ms.el.classList.toggle('cooling', mLeft <= 0);
   }
   const eq = G.eq, w = ibEls.weapon, wsig = eq.id + ':' + eq.tier;
   if (w.sig !== wsig) {
