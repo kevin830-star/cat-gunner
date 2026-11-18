@@ -85,12 +85,7 @@ function setMasterVolume(val) {
 const ttsCache = new Map();
 const ttsInFlight = new Map();
 const staticVoiceMap = Object.create(null);
-let voiceStats = { total: 224, cached: 0 };
 let speakSeq = 0;
-let ttsStatusText = '';
-let ttsBusy = false;
-let ttsPregenBusy = false;
-let ttsQuotaLimited = false;
 let zhBrowserVoice = null;
 const lastAnnounce = { text: '', at: 0 };
 
@@ -138,40 +133,19 @@ function speakBrowser(clean, { interrupt = true, seq = speakSeq } = {}) {
 
 async function loadVoiceArchive() {
   try {
-    const [mRes, sRes] = await Promise.all([
-      fetch('/voices/manifest.json', { cache: 'no-store' }),
-      fetch('/api/tts/status', { cache: 'no-store' }),
-    ]);
-    if (mRes.ok) {
-      const m = await mRes.json();
+    const mRes = await fetch('voices/manifest.json', { cache: 'no-store' });
+    if (mRes && mRes.ok) {
+      const m = await mRes.json().catch(() => null);
       if (m && m.phrases && typeof m.phrases === 'object') {
         for (const k of Object.keys(staticVoiceMap)) delete staticVoiceMap[k];
         Object.assign(staticVoiceMap, m.phrases);
       }
     }
-    if (sRes.ok) {
-      const s = await sRes.json();
-      if (Number.isFinite(s?.total)) voiceStats = { total: s.total, cached: s.cached || 0 };
-    }
-    refreshToggles();
   } catch {
-    // Ignore startup archive check errors
+    // 静态语音索引不存在时直接使用浏览器语音托底
   }
 }
 loadVoiceArchive();
-
-function voiceDisplayLabel() {
-  if (ttsPregenBusy) return `🎙️ 正在预生成题库语音…（已存档 ${voiceStats.cached}/${voiceStats.total}）`;
-  if (ttsStatusText) return `⚠️ ${ttsStatusText}`;
-  if (ttsBusy) return '🎙️ 语音：正在生成优化女声…';
-  if (ttsQuotaLimited) {
-    return `🎙️ 语音：浏览器托底中 · 优化女声已存档 (${voiceStats.cached}/${voiceStats.total})`;
-  }
-  if (voiceStats.total > 0 && voiceStats.cached >= voiceStats.total) {
-    return `🎙️ 语音：优化女声已全量存档 (${voiceStats.cached}/${voiceStats.total}) + 浏览器托底`;
-  }
-  return `🎙️ 语音：优化女声 (${voiceStats.cached}/${voiceStats.total}) + 浏览器托底`;
-}
 
 function formatSpeechText(text) {
   return String(text)
@@ -185,135 +159,64 @@ function formatSpeechText(text) {
     .trim();
 }
 
-async function fetchTtsWav(clean, style) {
-  const key = `${style}|${clean}`;
-  const cached = ttsCache.get(key);
+async function fetchStaticVoiceWav(clean) {
+  const cached = ttsCache.get(clean);
   if (cached) return cached;
+  const staticFile = staticVoiceMap[clean];
+  if (!staticFile) return null;
 
-  let req = ttsInFlight.get(key);
+  let req = ttsInFlight.get(clean);
   if (!req) {
     req = (async () => {
-      const staticFile = staticVoiceMap[clean];
-      if (staticFile) {
-        const sRes = await fetch(`/voices/${staticFile}`);
-        if (sRes.ok) {
-          const buf = await sRes.arrayBuffer();
-          if (ttsCache.size >= 100) {
-            const oldest = ttsCache.keys().next().value;
-            ttsCache.delete(oldest);
-          }
-          ttsCache.set(key, buf);
-          return buf;
-        }
-      }
-      const res = await fetch('/api/tts', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: clean, style }),
-      });
-      if (!res.ok) {
-        let msg = `语音请求失败 (${res.status})`;
-        let code = '';
-        try {
-          const data = await res.json();
-          if (data && data.error) msg = data.error;
-          if (data && data.code) code = data.code;
-        } catch (e) { /* ignore */ }
-        const err = new Error(msg);
-        err.status = res.status;
-        err.code = code;
-        throw err;
-      }
-      const buf = await res.arrayBuffer();
+      const sRes = await fetch(`voices/${staticFile}`);
+      if (!sRes.ok) return null;
+      const buf = await sRes.arrayBuffer();
       if (ttsCache.size >= 100) {
         const oldest = ttsCache.keys().next().value;
         ttsCache.delete(oldest);
       }
-      ttsCache.set(key, buf);
-      loadVoiceArchive();
+      ttsCache.set(clean, buf);
       return buf;
     })().finally(() => {
-      ttsInFlight.delete(key);
+      ttsInFlight.delete(clean);
     });
-    ttsInFlight.set(key, req);
+    ttsInFlight.set(clean, req);
   }
   return req;
 }
 
-async function pregenerateAllVoices() {
-  if (ttsPregenBusy) return;
-  ttsPregenBusy = true;
-  ttsStatusText = '';
-  refreshToggles();
-  try {
-    const res = await fetch('/api/tts/pregenerate', { method: 'POST' });
-    const data = await res.json().catch(() => ({}));
-    if (Number.isFinite(data?.total)) voiceStats = { total: data.total, cached: data.cached || 0 };
-    await loadVoiceArchive();
-    if (!res.ok) {
-      if (res.status === 429 || data?.code === 'RESOURCE_EXHAUSTED') ttsQuotaLimited = true;
-      ttsStatusText = data?.error || `预生成失败 (${res.status})`;
-    } else {
-      ttsQuotaLimited = false;
-      ttsStatusText = '';
-    }
-  } catch (err) {
-    ttsStatusText = err?.message || '预生成请求失败';
-  } finally {
-    ttsPregenBusy = false;
-    refreshToggles();
-  }
-}
-
-async function speak(text, interrupt = true, { manual = false, allowApi = true } = {}) {
+async function speak(text, interrupt = true) {
   if (isAudioMuted() || !text) return;
   const clean = formatSpeechText(text);
   if (!clean) return;
-  const style = interrupt
-    ? '自然明媚、元气亲切的年轻女声，标准普通话，吐字清晰温暖，像活泼可爱的少女老师'
-    : '活泼明媚、充满元气的少女解说女声，标准普通话，清脆利落';
-  const cacheKey = `${style}|${clean}`;
-  const isCached = ttsCache.has(cacheKey) || Boolean(staticVoiceMap[clean]);
   const seq = interrupt ? ++speakSeq : speakSeq;
   if (interrupt) SFX.stopVoice();
 
-  // 无已生成的优化语音时：战斗播报(allowApi=false)或配额已用尽时直接使用浏览器语音托底
-  if (!isCached && (!allowApi || (ttsQuotaLimited && !manual))) {
-    speakBrowser(clean, { interrupt, seq });
-    return;
+  // 优先播放已预生成并保存的优化语音文件；没有存档文件则立即用浏览器语音托底
+  if (ttsCache.has(clean) || staticVoiceMap[clean]) {
+    try {
+      const buf = await fetchStaticVoiceWav(clean);
+      if (seq !== speakSeq || isAudioMuted()) return;
+      if (buf) {
+        const played = await SFX.playVoiceBuffer(buf, { interrupt });
+        if (!played && !interrupt && seq === speakSeq && !isAudioMuted()) {
+          if (SFX.isVoicePlaying()) {
+            SFX.onVoiceIdle(() => {
+              if (seq === speakSeq && !isAudioMuted()) SFX.playVoiceBuffer(buf, { interrupt: false });
+            });
+          } else if (window.speechSynthesis && window.speechSynthesis.speaking) {
+            speakBrowser(clean, { interrupt: false, seq });
+          }
+        }
+        return;
+      }
+    } catch {
+      // 读取或解码异常时回退浏览器语音
+    }
   }
 
-  try {
-    ttsBusy = !isCached;
-    if (ttsBusy) refreshToggles();
-    const buf = await fetchTtsWav(clean, style);
-    ttsBusy = false;
-    if (!isCached) {
-      ttsQuotaLimited = false;
-      ttsStatusText = '';
-    }
-    if (seq !== speakSeq || isAudioMuted()) { refreshToggles(); return; }
-    const played = await SFX.playVoiceBuffer(buf, { interrupt });
-    if (!played && !interrupt && seq === speakSeq && !isAudioMuted()) {
-      if (SFX.isVoicePlaying()) {
-        SFX.onVoiceIdle(() => {
-          if (seq === speakSeq && !isAudioMuted()) SFX.playVoiceBuffer(buf, { interrupt: false });
-        });
-      } else if (window.speechSynthesis && window.speechSynthesis.speaking) {
-        speakBrowser(clean, { interrupt: false, seq });
-      }
-    }
-    refreshToggles();
-  } catch (err) {
-    ttsBusy = false;
-    if (err?.status === 429 || err?.code === 'RESOURCE_EXHAUSTED') {
-      ttsQuotaLimited = true;
-    }
-    if (manual) ttsStatusText = err?.message || '在线语音不可用，已切换浏览器语音';
-    refreshToggles();
-    if (seq === speakSeq && !isAudioMuted()) {
-      speakBrowser(clean, { interrupt, seq });
-    }
+  if (seq === speakSeq && !isAudioMuted()) {
+    speakBrowser(clean, { interrupt, seq });
   }
 }
 function announce(text) {
@@ -324,7 +227,7 @@ function announce(text) {
   if (clean === lastAnnounce.text && now - lastAnnounce.at < 1500) return;
   lastAnnounce.text = clean;
   lastAnnounce.at = now;
-  speak(clean, false, { allowApi: false });
+  speak(clean, false);
 }
 
 // ---------- 画布与镜头 ----------
@@ -504,6 +407,18 @@ function ownedList(r = G) {
   const list = [];
   for (const w of WEAPONS) for (let t = 0; t < TIERS.length; t++) if (r.inv[w.id][t] > 0) list.push({ id: w.id, tier: t, n: r.inv[w.id][t] });
   return list;
+}
+function totalWeaponCount(r = G) {
+  let n = 0;
+  for (const w of WEAPONS) for (let t = 0; t < TIERS.length; t++) n += (r.inv[w.id][t] || 0);
+  return n;
+}
+function weaponSellPrice(id, tier) {
+  const w = weaponDef(id);
+  if (!w) return 0;
+  let dCount = 1;
+  for (let i = 0; i < tier; i++) dCount *= MERGE_NEED[i] || 2;
+  return Math.floor(w.cost * dCount / 2);
 }
 function fixEquip(r = G) {
   if (r.eq && r.inv[r.eq.id] && r.inv[r.eq.id][r.eq.tier] > 0) return;
@@ -2278,16 +2193,17 @@ function renderShop() {
 
   if (shopTab === 'weapon') {
   // 武器库
-  const own = ownedList(), canMerge = own.some(o => o.tier < TIERS.length - 1 && o.n >= MERGE_NEED[o.tier]);
-  h += `<h3>武器库</h3><div class="wtools"><span>相同的武器 ${MERGE_NEED[0]} 把合成 1 把更高一阶（A 级起需要 ${MERGE_NEED[3]} 把）</span><button data-action="mergeAll" ${canMerge ? '' : 'disabled'}>一键合成</button></div><div class="wgrid">`;
+  const own = ownedList(), totalOwn = totalWeaponCount(), canSell = totalOwn > 1, canMerge = own.some(o => o.tier < TIERS.length - 1 && o.n >= MERGE_NEED[o.tier]);
+  h += `<h3>武器库</h3><div class="wtools"><span>相同的武器 ${MERGE_NEED[0]} 把合成 1 把更高一阶（A 级起需要 ${MERGE_NEED[3]} 把）· 多余武器可半价出售</span><button data-action="mergeAll" ${canMerge ? '' : 'disabled'}>一键合成</button></div><div class="wgrid">`;
   for (const o of own) {
     const w = weaponDef(o.id), s = weaponStats(o.id, o.tier), eqd = G.eq.id === o.id && G.eq.tier === o.tier;
     const need = MERGE_NEED[o.tier], top = o.tier >= TIERS.length - 1, key = `${o.id}:${o.tier}`;
+    const sellPrice = weaponSellPrice(o.id, o.tier);
     h += `<div class="wcell t${o.tier}${eqd ? ' equipped' : ''}" style="--tc:${TIERS[o.tier].color}">
       <div class="top"><img class="wi" src="${ICONS.url[o.id]}" alt=""><div style="text-align:right">${tierBadge(o.tier)}<div class="cnt">×${o.n}</div></div></div>
       <div class="wn">${w.name}</div>
       <div class="ws">攻击力 ${Math.round(s.dps)}/秒 · 伤害 ${Math.round(s.dmg)}${s.count > 1 ? '×' + s.count : ''} · 射速 ${(1 / s.interval).toFixed(1)}/秒<br>${s.area}</div>
-      <div class="row">${btn('eqW', key, eqd ? '使用中' : '装备', !eqd)}${top ? '' : `<button class="merge" data-action="mergeW" data-id="${key}" ${o.n >= need ? '' : 'disabled'}>合成 ${o.n}/${need}</button>`}</div></div>`;
+      <div class="row">${btn('eqW', key, eqd ? '使用中' : '装备', !eqd)}${top ? '' : `<button class="merge" data-action="mergeW" data-id="${key}" ${o.n >= need ? '' : 'disabled'}>合成 ${o.n}/${need}</button>`}<button class="sell" data-action="sellW" data-id="${key}" ${canSell ? '' : 'disabled'}>${canSell ? `半价出售 +${sellPrice} 🐟` : '至少保留 1 把'}</button></div></div>`;
   }
   h += '</div><h3>购买武器（D 级）</h3><div class="cards">';
   for (const w of WEAPONS) {
@@ -2404,6 +2320,15 @@ $('unlockFx').addEventListener('click', hideUnlock);
 
 function shopAction(action, id) {
   if (action === 'buyW') { const w = weaponDef(id); if (pay(w.cost)) { G.inv[id][0]++; fixEquip(); } }
+  else if (action === 'sellW') {
+    const [wid, t] = id.split(':'), tier = +t;
+    if (G.inv[wid] && G.inv[wid][tier] > 0 && totalWeaponCount() > 1) {
+      G.inv[wid][tier]--;
+      G.fish += weaponSellPrice(wid, tier);
+      fixEquip();
+      sfx.buy();
+    }
+  }
   else if (action === 'eqW') { const [wid, t] = id.split(':'); if (G.inv[wid] && G.inv[wid][+t] > 0) { G.eq = { id: wid, tier: +t }; sfx.switch(); } }
   else if (action === 'mergeW') {
     const [wid, t] = id.split(':');
@@ -2450,13 +2375,6 @@ function refreshToggles() {
     if ($('audioBadge' + n)) $('audioBadge' + n).textContent = muted ? '已静音' : '未静音';
     if ($('volSlider' + n)) $('volSlider' + n).value = String(muted ? 0 : pct);
     if ($('volPct' + n)) $('volPct' + n).textContent = (muted ? 0 : pct) + '%';
-    if ($('voiceTag' + n)) $('voiceTag' + n).textContent = voiceDisplayLabel();
-    const pg = $('voicePregen' + n);
-    if (pg) {
-      const done = voiceStats.total > 0 && voiceStats.cached >= voiceStats.total;
-      pg.disabled = ttsPregenBusy || done;
-      pg.textContent = ttsPregenBusy ? '生成中…' : done ? '已全量存档' : '预生成语音';
-    }
   }
   const bestParts = [];
   if (store.best) bestParts.push(`通过 ${store.best} 关`);
@@ -2493,13 +2411,6 @@ document.addEventListener('click', e => {
     case 'toggleGrade': store.grade = (store.grade + 1) % GRADE_LEVELS.length; save(); refreshToggles(); break;
     case 'togglePinyin': store.pinyin = !store.pinyin; save(); refreshToggles(); break;
     case 'toggleMute': toggleMasterMute(false); break;
-    case 'pregenVoice':
-      pregenerateAllVoices();
-      break;
-    case 'testVoice':
-      if (isAudioMuted()) { store.mute = false; if (store.volume <= 0) store.volume = 0.8; save(); applyMasterAudio(false); refreshToggles(); }
-      speak('你好呀！我是小猫咪，今天也要元气满满地保卫猫窝哦！', true, { manual: true });
-      break;
     case 'quizAns': answerQuiz(+b.dataset.i); break;
     case 'quizDone': finishQuiz(); break;
     case 'examStart': if (exam) { exam.started = true; renderExam(); } break;
@@ -2507,14 +2418,14 @@ document.addEventListener('click', e => {
     case 'examNext': nextExam(); break;
     case 'examRevive': reviveFromExam(); break;
     case 'examFail': case 'examGiveUp': gameOver(exam ? exam.reason : '闯关失败'); break;
-    case 'speak': speak(b.dataset.t, true, { manual: true }); break;
+    case 'speak': speak(b.dataset.t, true); break;
     case 'mini': openMini(); break;
     case 'miniAns': answerMini(+b.dataset.i); break;
     case 'miniNext': nextMini(); break;
     case 'miniDone': setState('shop'); renderShop(); show('shop'); break;
     case 'next': G.level++; startLevel(); break;
     case 'shopTab': shopTab = id; sfx.switch(); renderShop(); break;
-    case 'buyW': case 'eqW': case 'mergeW': case 'mergeAll': case 'buyI': case 'upI': case 'stat': case 'repair': shopAction(a, id); break;
+    case 'buyW': case 'sellW': case 'eqW': case 'mergeW': case 'mergeAll': case 'buyI': case 'upI': case 'stat': case 'repair': shopAction(a, id); break;
   }
 });
 

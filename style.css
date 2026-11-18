@@ -90,14 +90,6 @@ button.plain { margin-top: 14px; background: none; border: none; text-decoration
 .audio-panel.muted .vol-wrap { opacity: .55; }
 .vol-slider { width: 88px; accent-color: #e8743b; cursor: pointer; }
 .vol-pct { min-width: 34px; text-align: right; font-variant-numeric: tabular-nums; }
-.audio-voice-row {
-  width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 8px;
-  padding-top: 6px; border-top: 1.5px dashed #d9b98a; font-size: 12px; font-weight: 700;
-}
-.voice-tag { color: #6b4a2e; text-align: left; flex: 1; min-width: 0; word-break: break-word; }
-.voice-actions { display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto; flex-wrap: wrap; justify-content: flex-end; }
-.voice-test-btn { padding: 3px 10px; font-size: 12px; font-weight: 700; background: #fff; flex: 0 0 auto; }
-.voice-test-btn:hover { background: #ffe9a8; }
 
 /* 商店 */
 .shophead { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
@@ -199,10 +191,12 @@ body.touch .opt .knum { display: none; }
 .wcell .cnt { font-weight: 900; font-size: 18px; }
 .wcell .wn { font-weight: 700; font-size: 14px; }
 .wcell .ws { font-size: 12px; color: #a0704a; line-height: 1.4; }
-.wcell .row { display: flex; gap: 6px; margin-top: auto; }
+.wcell .row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: auto; }
 .wcell button { flex: 1; padding: 6px 4px; font-size: 13px; font-weight: 700; cursor: pointer; background: #ffd27a; border: 2px solid #4a3423; border-radius: 10px; }
 .wcell button.merge { background: #9be37a; }
-.wcell button:disabled { background: #e6ddcc; opacity: .6; cursor: default; }
+.wcell button.sell { flex: 1 1 100%; background: #ffe3de; color: #8f2213; font-size: 12px; padding: 5px 6px; }
+.wcell button.sell:hover:not(:disabled) { background: #ffc9bf; }
+.wcell button:disabled { background: #e6ddcc; color: #7a6652; opacity: .6; cursor: default; }
 .wtools { display: flex; align-items: center; gap: 10px; margin: 8px 0; flex-wrap: wrap; font-size: 13px; }
 .wtools button { padding: 7px 14px; font-weight: 700; font-size: 14px; cursor: pointer; background: #9be37a; border: 2px solid #4a3423; border-radius: 10px; }
 .wtools button:disabled { background: #e6ddcc; opacity: .6; cursor: default; }
