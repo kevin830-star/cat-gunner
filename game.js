@@ -232,14 +232,22 @@ function announce(text) {
 
 // ---------- 画布与镜头 ----------
 let W = 0, H = 0, scale = 1, camZoom = 1;
+let touchMode = false;
 const cam = { x: 0, y: 0 };
+const vignetteCache = new Map();
+let vignetteW = 0, vignetteH = 0;
 function resize() {
-  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const isCoarse = touchMode || (window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
+  const dpr = Math.min(window.devicePixelRatio || 1, isCoarse ? 1.5 : 2);
   W = window.innerWidth; H = window.innerHeight;
   canvas.width = Math.round(W * dpr); canvas.height = Math.round(H * dpr);
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   canvas._dpr = dpr;
   scale = clamp(Math.min(W, H) / 620, 0.55, 1.2);
+  if (W !== vignetteW || H !== vignetteH) {
+    vignetteCache.clear();
+    vignetteW = W; vignetteH = H;
+  }
 }
 window.addEventListener('resize', resize);
 resize();
@@ -282,7 +290,6 @@ for (const lay of AMBIENT_LAYERS) {
 const keys = {};
 const mouse = { x: 0, y: 0, down: false };
 const joy = { active: false, id: null, sx: 0, sy: 0, dx: 0, dy: 0 };
-let touchMode = false;
 
 window.addEventListener('keydown', e => {
   if (e.repeat) return;
@@ -324,7 +331,7 @@ canvas.addEventListener('contextmenu', e => e.preventDefault());
 
 canvas.addEventListener('touchstart', e => {
   e.preventDefault(); initAudio(); skipClear();
-  if (!touchMode) { touchMode = true; document.body.classList.add('touch'); }
+  if (!touchMode) { touchMode = true; document.body.classList.add('touch'); if (canvas._dpr > 1.5) resize(); }
   if (!joy.active) {
     const t = e.changedTouches[0];
     Object.assign(joy, { active: true, id: t.identifier, sx: t.clientX, sy: t.clientY, dx: 0, dy: 0 });
@@ -703,8 +710,10 @@ function triggerRedRage() {
 
 // ---------- 效果 ----------
 function addText(x, y, text, color = '#fff', size = 14, life = 0.9) { L.texts.push({ x, y, text, color, size, life }); }
+const maxParts = () => (touchMode ? 140 : 240);
 function burst(x, y, color, n = 6, speed = 120) {
-  for (let i = 0; i < n; i++) {
+  const cap = maxParts();
+  for (let i = 0; i < n && L.parts.length < cap; i++) {
     const a = rand(0, TAU), s = rand(speed * 0.3, speed);
     L.parts.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: rand(0.25, 0.55), color, r: rand(2, 4.5) });
   }
@@ -1059,14 +1068,19 @@ function enemyBasePoints(e) {
 function triggerComboFx(x, y, combo, ct, tierUp) {
   if (combo < 5) return;
   const milestone = tierUp || combo % 5 === 0;
-  if (L.parts.length < 360) {
+  if (L.parts.length < maxParts()) {
     const scalePow = clamp(0.9 + combo * 0.04, 1, 2.1);
-    const sparkCount = milestone ? Math.min(26, 12 + Math.floor(combo * 0.5)) : Math.min(10, 4 + Math.floor(combo / 5));
-    const starCount = milestone ? Math.min(14, 6 + Math.floor(combo * 0.25)) : Math.min(5, 2 + Math.floor(combo / 8));
+    const sparkCount = touchMode
+      ? (milestone ? Math.min(14, 8 + Math.floor(combo * 0.25)) : Math.min(5, 3 + Math.floor(combo / 10)))
+      : (milestone ? Math.min(22, 10 + Math.floor(combo * 0.4)) : Math.min(8, 4 + Math.floor(combo / 6)));
+    const starCount = touchMode
+      ? (milestone ? Math.min(7, 4 + Math.floor(combo * 0.12)) : 2)
+      : (milestone ? Math.min(12, 5 + Math.floor(combo * 0.2)) : Math.min(4, 2 + Math.floor(combo / 10)));
     ring(x, y, (milestone ? 58 : 34) + Math.min(56, combo * 1.6), ct.color, milestone ? 0.42 : 0.26, milestone);
     if (milestone) ring(x, y, 36 + Math.min(34, combo), '#fff7b0', 0.28);
     L.parts.push({ x, y, vx: 0, vy: 0, life: milestone ? 0.28 : 0.18, max: milestone ? 0.28 : 0.18, k: 'flash', color: '#fff7b0', r: (milestone ? 22 : 13) + Math.min(16, combo * 0.45) });
-    for (let i = 0; i < sparkCount; i++) {
+    const cap = maxParts();
+    for (let i = 0; i < sparkCount && L.parts.length < cap; i++) {
       const a = (TAU * i) / sparkCount + rand(-0.22, 0.22);
       const spd = rand(180, milestone ? 390 : 250) * (0.85 + 0.15 * scalePow);
       L.parts.push({
@@ -1078,7 +1092,7 @@ function triggerComboFx(x, y, combo, ct, tierUp) {
       });
     }
     const palette = combo >= 20 ? [ct.color, '#ffe066', '#8cf0ff', '#fff'] : [ct.color, '#ffe066', '#fff7b0'];
-    for (let i = 0; i < starCount; i++) {
+    for (let i = 0; i < starCount && L.parts.length < cap; i++) {
       const a = rand(0, TAU), spd = rand(95, milestone ? 270 : 165);
       const life = rand(0.32, milestone ? 0.62 : 0.4);
       L.parts.push({
@@ -1092,7 +1106,9 @@ function triggerComboFx(x, y, combo, ct, tierUp) {
     if (milestone) {
       if (tierUp) {
         ring(L.cat.x, L.cat.y, 82, ct.color, 0.45);
-        L.parts.push({ x: L.cat.x, y: L.cat.y, vx: 0, vy: 0, life: 0.24, max: 0.24, k: 'flash', color: ct.color, r: 24 });
+        if (L.parts.length < cap) {
+          L.parts.push({ x: L.cat.x, y: L.cat.y, vx: 0, vy: 0, life: 0.24, max: 0.24, k: 'flash', color: ct.color, r: 24 });
+        }
       }
       L.shake = Math.max(L.shake, combo >= 20 ? 0.2 : combo >= 10 ? 0.14 : 0.09);
     }
@@ -1426,6 +1442,7 @@ function update(rawDt) {
   }
   const targetFilter = L.combo >= 30 ? 1 : L.combo >= 20 ? 0.72 : 0;
   L.comboFilter += (targetFilter - L.comboFilter) * Math.min(1, rawDt * 4.5);
+  if (targetFilter === 0 && L.comboFilter < 0.02) L.comboFilter = 0;
   if (L.comboBreakT > 0) L.comboBreakT = Math.max(0, L.comboBreakT - rawDt);
   if (L.comboBreak) {
     L.comboBreak.t -= rawDt;
@@ -2461,7 +2478,9 @@ function drawGround() {
 }
 function drawAmbientMotes(vw, vh) {
   const spanW = vw + 160, spanH = vh + 160;
-  for (const m of ambientMotes) {
+  const step = touchMode ? 2 : 1;
+  for (let i = 0; i < ambientMotes.length; i += step) {
+    const m = ambientMotes[i];
     const x0 = ((m.u * spanW + m.vx * ambientT - cam.x * m.parallax) % spanW + spanW) % spanW - 80;
     const y0 = ((m.v * spanH + m.vy * ambientT - cam.y * m.parallax) % spanH + spanH) % spanH - 80;
     const wx = cam.x + x0 + Math.sin(ambientT * m.swaySpd + m.phase) * m.swayAmp;
@@ -3057,10 +3076,13 @@ function drawEnemy(e) {
   }
   if (e.flash > 0) {
     const flashAmt = clamp(e.flash / 0.12, 0, 1);
+    const pad = e.type === 'boss' ? HIT_SZ : e.type === 'snake' ? Math.min(HIT_SZ, Math.ceil(r * 9.5 + 32)) : Math.min(HIT_SZ, Math.ceil(r * 3.8 + 44));
+    const box = Math.max(64, pad + (pad & 1));
+    const half = box / 2;
     hitCtx.setTransform(2, 0, 0, 2, 0, 0);
-    hitCtx.clearRect(0, 0, HIT_SZ, HIT_SZ);
+    hitCtx.clearRect(0, 0, box, box);
     hitCtx.save();
-    hitCtx.translate(HIT_HALF - e.x, HIT_HALF - e.y);
+    hitCtx.translate(half - e.x, half - e.y);
     ctxBase = hitCtx;
     ctx = hitCtx;
     try {
@@ -3070,15 +3092,15 @@ function drawEnemy(e) {
       ctx = ctxReal;
       hitCtx.restore();
     }
-    ctx.drawImage(hitCanvas, e.x - HIT_HALF, e.y - HIT_HALF, HIT_SZ, HIT_SZ);
+    ctx.drawImage(hitCanvas, 0, 0, box * 2, box * 2, e.x - half, e.y - half, box, box);
     hitCtx.save();
     hitCtx.globalCompositeOperation = 'source-in';
     hitCtx.fillStyle = '#ffffff';
-    hitCtx.fillRect(0, 0, HIT_SZ, HIT_SZ);
+    hitCtx.fillRect(0, 0, box, box);
     hitCtx.restore();
     const prevA = ctx.globalAlpha;
     ctx.globalAlpha = prevA * flashAmt * 0.88;
-    ctx.drawImage(hitCanvas, e.x - HIT_HALF, e.y - HIT_HALF, HIT_SZ, HIT_SZ);
+    ctx.drawImage(hitCanvas, 0, 0, box * 2, box * 2, e.x - half, e.y - half, box, box);
     ctx.globalAlpha = prevA;
   } else {
     if (e.tier > 0 && T.tint) drawEnemyTinted(e); else drawEnemyBody(e);
@@ -3152,6 +3174,65 @@ function drawStar(x, y, R, fill, stroke, lw = 3, rot = 0) {
   for (let i = 0; i < 10; i++) { const a = -Math.PI / 2 + rot + i * Math.PI / 5, r = i % 2 ? R * 0.48 : R; ctx.lineTo(x + Math.cos(a) * r, y + Math.sin(a) * r); }
   ctx.closePath(); ctx.fillStyle = fill; ctx.fill();
   if (stroke) { ctx.lineWidth = lw; ctx.strokeStyle = stroke; ctx.lineJoin = 'round'; ctx.stroke(); }
+}
+const starSpriteCache = new Map();
+function getStarSprite(color) {
+  let c = starSpriteCache.get(color);
+  if (c) return c;
+  c = document.createElement('canvas');
+  c.width = 40; c.height = 40;
+  const sc = c.getContext('2d');
+  sc.beginPath();
+  for (let i = 0; i < 10; i++) {
+    const a = -Math.PI / 2 + i * Math.PI / 5, r = i % 2 ? 7.2 : 15;
+    sc.lineTo(20 + Math.cos(a) * r, 20 + Math.sin(a) * r);
+  }
+  sc.closePath(); sc.fillStyle = color; sc.fill();
+  sc.lineWidth = 2.6; sc.strokeStyle = OUT; sc.lineJoin = 'round'; sc.stroke();
+  starSpriteCache.set(color, c);
+  return c;
+}
+const glowSpriteCache = new Map();
+function getGlowSprite(color) {
+  let c = glowSpriteCache.get(color);
+  if (c) return c;
+  c = document.createElement('canvas');
+  c.width = 128; c.height = 128;
+  const gc = c.getContext('2d');
+  const rg = gc.createRadialGradient(64, 64, 4, 64, 64, 64);
+  rg.addColorStop(0, color);
+  rg.addColorStop(1, 'rgba(0,0,0,0)');
+  gc.fillStyle = rg;
+  gc.fillRect(0, 0, 128, 128);
+  glowSpriteCache.set(color, c);
+  return c;
+}
+function getVignette(kind) {
+  let c = vignetteCache.get(kind);
+  if (c) return c;
+  c = document.createElement('canvas');
+  c.width = Math.max(1, W); c.height = Math.max(1, H);
+  const vc = c.getContext('2d');
+  const inner = Math.min(W, H) * (kind === 'rage' ? 0.28 : kind === 'break' ? 0.30 : 0.34);
+  const outer = Math.max(W, H) * (kind === 'rage' ? 0.72 : kind === 'break' ? 0.78 : 0.76);
+  const g = vc.createRadialGradient(W / 2, H / 2, inner, W / 2, H / 2, outer);
+  if (kind === 'combo30') {
+    g.addColorStop(0, 'rgba(0,0,0,0)');
+    g.addColorStop(1, 'rgba(255, 72, 158, 0.25)');
+  } else if (kind === 'combo20') {
+    g.addColorStop(0, 'rgba(0,0,0,0)');
+    g.addColorStop(1, 'rgba(168, 92, 255, 0.20)');
+  } else if (kind === 'rage') {
+    g.addColorStop(0, 'rgba(255, 0, 0, 0)');
+    g.addColorStop(1, 'rgba(255, 190, 40, 0.34)');
+  } else {
+    g.addColorStop(0, 'rgba(30, 10, 12, 0)');
+    g.addColorStop(1, 'rgba(175, 36, 42, 0.26)');
+  }
+  vc.fillStyle = g;
+  vc.fillRect(0, 0, c.width, c.height);
+  vignetteCache.set(kind, c);
+  return c;
 }
 function drawTierBadge(x, yMid, t) {
   const label = TIERS[t].id, w = label.length > 1 ? 36 : 22, h = 17;
@@ -3425,11 +3506,7 @@ function drawComboSplash(narrow) {
 
   ctx.globalAlpha = alpha * 0.32;
   const glowR = narrow ? 92 : 128;
-  const rg = ctx.createRadialGradient(0, 0, 8, 0, 0, glowR);
-  rg.addColorStop(0, s.color);
-  rg.addColorStop(1, 'rgba(0,0,0,0)');
-  ctx.fillStyle = rg;
-  ctx.beginPath(); ctx.arc(0, 0, glowR, 0, TAU); ctx.fill();
+  ctx.drawImage(getGlowSprite(s.color), -glowR, -glowR, glowR * 2, glowR * 2);
 
   ctx.globalAlpha = alpha;
   ctx.scale(sc, sc);
@@ -3473,13 +3550,8 @@ function drawComboPenalty(narrow) {
 
   ctx.save();
   // 四周暗红冷却边缘闪光，制造连击中断的紧迫惩罚感
-  const vg = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.3, W / 2, H / 2, Math.max(W, H) * 0.78);
-  vg.addColorStop(0, 'rgba(30, 10, 12, 0)');
-  vg.addColorStop(1, `rgba(175, 36, 42, ${0.26 * alpha})`);
-  ctx.fillStyle = vg;
-  ctx.fillRect(0, 0, W, H);
-
   ctx.globalAlpha = alpha;
+  ctx.drawImage(getVignette('break'), 0, 0, W, H);
   const cx = W / 2 + jx, cy = H * 0.29 + dropY;
   outlined('连击重置！', cx, cy, narrow ? 24 : 30, '#ff8b85', 'center');
   outlined(`${b.combo} 连击 · ×${b.mult.toFixed(1)} 积分已清空`, cx, cy + (narrow ? 24 : 28), narrow ? 13 : 15, '#ffd7d2', 'center');
@@ -3487,25 +3559,25 @@ function drawComboPenalty(narrow) {
 }
 
 function drawHUD() {
-  // 连击 >= 20 高燃战斗边缘氛围晕影
+  // 连击 >= 20 高燃战斗色彩滤镜氛围（轻量全屏叠色 + 缓存晕影，避免手机端 ctx.filter 掉帧）
   if (L && L.comboFilter > 0.02 && state === 'playing') {
     const f = L.comboFilter;
+    const is30 = L.combo >= 30;
     const pulse = 0.85 + 0.15 * Math.sin(performance.now() / 110);
-    const g = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.34, W / 2, H / 2, Math.max(W, H) * 0.76);
-    g.addColorStop(0, 'rgba(0, 0, 0, 0)');
-    g.addColorStop(1, L.combo >= 30
-      ? `rgba(255, 72, 158, ${0.22 * f * pulse})`
-      : `rgba(168, 92, 255, ${0.18 * f * pulse})`);
-    ctx.fillStyle = g;
+    ctx.save();
+    ctx.globalAlpha = f;
+    ctx.fillStyle = is30 ? 'rgba(255, 68, 148, 0.085)' : 'rgba(150, 82, 255, 0.07)';
     ctx.fillRect(0, 0, W, H);
+    ctx.globalAlpha = f * pulse;
+    ctx.drawImage(getVignette(is30 ? 'combo30' : 'combo20'), 0, 0, W, H);
+    ctx.restore();
   }
   // 答对中文题后的慢镜头特写边缘金光氛围晕影
   if (L && L.redRageT > 0 && state === 'playing') {
-    const g = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.28, W / 2, H / 2, Math.max(W, H) * 0.72);
-    g.addColorStop(0, 'rgba(255, 0, 0, 0)');
-    g.addColorStop(1, `rgba(255, 190, 40, ${0.26 + 0.08 * Math.sin(performance.now() / 80)})`);
-    ctx.fillStyle = g;
-    ctx.fillRect(0, 0, W, H);
+    ctx.save();
+    ctx.globalAlpha = 0.78 + 0.22 * Math.sin(performance.now() / 80);
+    ctx.drawImage(getVignette('rage'), 0, 0, W, H);
+    ctx.restore();
   }
   const bw = Math.min(150, W * 0.34);
   hudBar(8, 8, bw, '猫咪', L.cat.hp, catMaxHp(), '#ff7a8a');
@@ -3619,14 +3691,6 @@ function render() {
     }
   }
   ctx.save();
-  if ('filter' in ctx) {
-    if (L && L.comboFilter > 0.02 && state === 'playing') {
-      const f = L.comboFilter;
-      ctx.filter = `saturate(${(1 + 0.22 * f).toFixed(3)}) contrast(${(1 + 0.06 * f).toFixed(3)}) hue-rotate(${(-10 * f).toFixed(2)}deg)`;
-    } else {
-      ctx.filter = 'none';
-    }
-  }
   ctx.scale(effScale, effScale); ctx.translate(-cam.x + shx, -cam.y + shy);
   drawGround();
   drawAmbientMotes(vw, vh);
@@ -3675,10 +3739,11 @@ function render() {
     } else if (p.k === 'cstar') {
       const q = clamp(p.life / (p.max || 0.45), 0, 1);
       ctx.globalAlpha = clamp(q * 1.4, 0, 1);
+      const sz = p.r * (0.65 + 0.9 * q);
       ctx.save();
       ctx.translate(p.x, p.y);
       ctx.rotate((1 - q) * (p.spin || 3));
-      drawStar(0, 0, p.r * (0.45 + 0.65 * q), p.color, OUT, 1.5);
+      ctx.drawImage(getStarSprite(p.color), -sz, -sz, sz * 2, sz * 2);
       ctx.restore();
     } else {
       ctx.globalAlpha = clamp(p.life * 3, 0, 1);
@@ -3689,7 +3754,6 @@ function render() {
   for (const t of L.texts) { ctx.globalAlpha = clamp(t.life * 2, 0, 1); outlined(t.text, t.x, t.y, t.size, t.color); }
   ctx.globalAlpha = 1;
   ctx.restore();
-  if ('filter' in ctx) ctx.filter = 'none';
   drawHUD();
 }
 

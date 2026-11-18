@@ -18,7 +18,7 @@ const HOST = '0.0.0.0';
 
 app.use(express.json({ limit: '16kb' }));
 
-const TTS_MODEL = 'gemini-3.8-flash-lite-tts';
+const TTS_MODELS = ['gemini-3.8-flash-lite-tts', 'gemini-3.8-flash-tts'];
 const VOICES_DIR = path.join(__dirname, 'voices');
 const MANIFEST_PATH = path.join(VOICES_DIR, 'manifest.json');
 const DISK_CACHE_DIR = path.join(__dirname, '.tts-cache');
@@ -69,7 +69,7 @@ syncManifestFromDisk();
 
 let aiClient = null;
 let cachedApiKey = null;
-let quotaCooldownUntil = 0;
+const modelCooldowns = new Map();
 let quotaKeyFingerprint = '';
 let lastRetryAfterSeconds = 0;
 
@@ -82,7 +82,7 @@ function getGeminiClient() {
   if (!apiKey) return null;
   if (!aiClient || cachedApiKey !== apiKey) {
     cachedApiKey = apiKey;
-    quotaCooldownUntil = 0;
+    modelCooldowns.clear();
     quotaKeyFingerprint = '';
     aiClient = new GoogleGenAI({
       apiKey,
@@ -222,64 +222,77 @@ async function synthesizeAndCache(text, style, { bypassCooldown = false } = {}) 
   }
 
   const fp = keyFingerprint(process.env.GEMINI_API_KEY);
-  const now = Date.now();
-  if (!bypassCooldown && quotaKeyFingerprint === fp && now < quotaCooldownUntil) {
-    const remainingSec = Math.max(1, Math.ceil((quotaCooldownUntil - now) / 1000));
-    const err = new Error('今日免费语音额度已用完（429），请在 Settings > Secrets 中切换已启用结算的 API 密钥后重试预生成。');
-    err.status = 429;
-    err.code = 'RESOURCE_EXHAUSTED';
-    err.retryAfterSeconds = lastRetryAfterSeconds || remainingSec;
-    throw err;
+  if (quotaKeyFingerprint !== fp) {
+    modelCooldowns.clear();
+    quotaKeyFingerprint = fp;
   }
 
   let task = ttsInFlight.get(cacheKey);
   if (!task) {
     task = (async () => {
-      const response = await ai.models.generateContent({
-        model: TTS_MODEL,
-        contents: [
-          {
-            role: 'user',
-            parts: [{ text, speechMetadata: { style } }],
-          },
-        ],
-        config: {
-          responseModalities: ['AUDIO'],
-          speechConfig: {
-            voiceConfig: { prebuiltVoiceConfig: { voiceName: VOICE_NAME } },
-          },
-        },
-      });
-      const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
-      if (!base64Audio) throw new Error('Gemini TTS returned no audio data.');
-      const wavBuffer = Buffer.from(base64Audio, 'base64');
-      putCache(cacheKey, wavBuffer, text, style, true);
-      return wavBuffer;
+      const now = Date.now();
+      let lastErr = null;
+      for (const model of TTS_MODELS) {
+        const cdUntil = modelCooldowns.get(model) || 0;
+        if (!bypassCooldown && now < cdUntil) continue;
+        try {
+          const response = await ai.models.generateContent({
+            model,
+            contents: [
+              {
+                role: 'user',
+                parts: [{ text, speechMetadata: { style } }],
+              },
+            ],
+            config: {
+              responseModalities: ['AUDIO'],
+              speechConfig: {
+                voiceConfig: { prebuiltVoiceConfig: { voiceName: VOICE_NAME } },
+              },
+            },
+          });
+          const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+          if (!base64Audio) throw new Error(`${model} returned no audio data.`);
+          const wavBuffer = Buffer.from(base64Audio, 'base64');
+          putCache(cacheKey, wavBuffer, text, style, true);
+          return wavBuffer;
+        } catch (err) {
+          const info = parseGeminiError(err);
+          lastErr = info;
+          if (info.status === 429) {
+            lastRetryAfterSeconds = info.retryAfterSeconds;
+            modelCooldowns.set(model, Date.now() + 60_000);
+            console.warn(`[TTS Quota 429] ${model}: ${info.code} (retry ~${info.retryAfterSeconds || 60}s)`);
+            continue;
+          }
+          console.warn(`[TTS Error ${info.status}] ${model}: ${info.message}`);
+          // 若备用模型遇到权限/不支持，继续抛出；若是主模型429已跳过，备用失败则停止
+          const wrapped = new Error(info.message);
+          wrapped.status = info.status;
+          wrapped.code = info.code;
+          wrapped.retryAfterSeconds = info.retryAfterSeconds;
+          throw wrapped;
+        }
+      }
+      const info = lastErr || {
+        status: 429,
+        code: 'RESOURCE_EXHAUSTED',
+        retryAfterSeconds: lastRetryAfterSeconds || 60,
+        message: '今日免费语音额度已用完（429），请在 Settings > Secrets 中切换已启用结算的 API 密钥后重试预生成。',
+      };
+      const wrapped = new Error(info.message);
+      wrapped.status = info.status;
+      wrapped.code = info.code;
+      wrapped.retryAfterSeconds = info.retryAfterSeconds;
+      throw wrapped;
     })().finally(() => {
       ttsInFlight.delete(cacheKey);
     });
     ttsInFlight.set(cacheKey, task);
   }
 
-  try {
-    const buf = await task;
-    return { buf, fromCache: false };
-  } catch (err) {
-    const info = parseGeminiError(err);
-    if (info.status === 429) {
-      quotaKeyFingerprint = fp;
-      lastRetryAfterSeconds = info.retryAfterSeconds;
-      quotaCooldownUntil = Date.now() + 60_000;
-      console.warn(`[TTS Quota 429] ${info.code} (retry ~${info.retryAfterSeconds || 60}s)`);
-    } else {
-      console.warn(`[TTS Error ${info.status}] ${info.message}`);
-    }
-    const wrapped = new Error(info.message);
-    wrapped.status = info.status;
-    wrapped.code = info.code;
-    wrapped.retryAfterSeconds = info.retryAfterSeconds;
-    throw wrapped;
-  }
+  const buf = await task;
+  return { buf, fromCache: false };
 }
 
 function getArchiveStats() {
@@ -315,7 +328,7 @@ app.post('/api/tts/pregenerate', async (_req, res) => {
     }
     let generated = 0;
     let errorInfo = null;
-    const concurrency = 2;
+    const concurrency = 1;
     let idx = 0;
 
     async function worker() {

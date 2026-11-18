@@ -52,6 +52,20 @@ export function collectAllVoicePhrases(rootDir) {
   };
 
   add('你好呀！我是小猫咪，今天也要元气满满地保卫猫窝哦！');
+  // 优先预生成高频技能释放、拾取增益与固定战斗提示
+  for (const fixed of [
+    '猫薄荷',
+    '冲击波',
+    '导弹防御',
+    '答对了，金光觉醒',
+    '考试通过，猫咪和猫窝满血复活，导弹防御加一次',
+    '小头目来了！',
+    '个头越大、颜色越深越强：蓝·强化 → 紫·精英 → 红·狂暴',
+  ]) {
+    add(fixed);
+  }
+  for (const b of BUFFS) add(`${b.name}，${b.tip}`);
+
   for (const q of FILL_QUIZ) {
     const ans = q.opts[0].split('|')[0];
     add(q.s.replace('____', ans).replace(/（.*?）/g, ''));
@@ -71,20 +85,6 @@ export function collectAllVoicePhrases(rootDir) {
   for (const w of COMPONENTS) add(w.c);
   for (const w of PIC_WORDS) add(w.c);
   for (const q of PRONOUNCE_QUIZ) add(q.w.replace(/（.*?）/g, ''));
-
-  // 技能释放、拾取增益与固定战斗提示
-  for (const fixed of [
-    '猫薄荷',
-    '冲击波',
-    '导弹防御',
-    '答对了，金光觉醒',
-    '考试通过，猫咪和猫窝满血复活，导弹防御加一次',
-    '小头目来了！',
-    '个头越大、颜色越深越强：蓝·强化 → 紫·精英 → 红·狂暴',
-  ]) {
-    add(fixed);
-  }
-  for (const b of BUFFS) add(`${b.name}，${b.tip}`);
 
   return [...phrases];
 }
