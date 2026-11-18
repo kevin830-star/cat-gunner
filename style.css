@@ -67,6 +67,36 @@ button.big:active { transform: translateY(3px); box-shadow: 0 1px 0 #4a3423; }
 button.plain { margin-top: 14px; background: none; border: none; text-decoration: underline; font-size: 15px; cursor: pointer; }
 .toggles { margin-top: 14px; display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
 .tgl { background: #fff; border: 2px solid #4a3423; border-radius: 999px; padding: 6px 14px; font-size: 14px; cursor: pointer; }
+.audio-panel {
+  margin: 12px auto 0; max-width: 390px; display: flex; align-items: center; justify-content: space-between;
+  gap: 10px; flex-wrap: wrap; background: #fbe6bd; border: 2px solid #4a3423; border-radius: 16px; padding: 8px 12px;
+}
+.audio-btn {
+  display: inline-flex; align-items: center; gap: 6px; padding: 6px 11px; font-weight: 700;
+  transition: background-color .15s, border-color .15s, transform .1s;
+}
+.audio-btn:active { transform: scale(.97); }
+.audio-dot { width: 9px; height: 9px; border-radius: 50%; flex: 0 0 auto; border: 1.5px solid #4a3423; }
+.audio-badge {
+  font-size: 11px; font-weight: 800; padding: 1px 7px; border-radius: 999px; border: 1.5px solid #4a3423;
+}
+.audio-panel.unmuted .audio-btn { background: #e4f6d4; border-color: #3c8f1f; }
+.audio-panel.unmuted .audio-dot { background: #5fc23f; box-shadow: 0 0 0 2px rgba(95, 194, 63, .28); }
+.audio-panel.unmuted .audio-badge { background: #5fc23f; color: #fff; border-color: #3c8f1f; }
+.audio-panel.muted .audio-btn { background: #ffe3de; border-color: #c8402d; }
+.audio-panel.muted .audio-dot { background: #c8402d; }
+.audio-panel.muted .audio-badge { background: #c8402d; color: #fff; border-color: #8f2213; }
+.vol-wrap { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 700; flex: 1; justify-content: flex-end; min-width: 130px; }
+.audio-panel.muted .vol-wrap { opacity: .55; }
+.vol-slider { width: 88px; accent-color: #e8743b; cursor: pointer; }
+.vol-pct { min-width: 34px; text-align: right; font-variant-numeric: tabular-nums; }
+.audio-voice-row {
+  width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding-top: 6px; border-top: 1.5px dashed #d9b98a; font-size: 12px; font-weight: 700;
+}
+.voice-tag { color: #6b4a2e; text-align: left; flex: 1; min-width: 0; word-break: break-word; }
+.voice-test-btn { padding: 3px 10px; font-size: 12px; font-weight: 700; background: #fff; flex: 0 0 auto; }
+.voice-test-btn:hover { background: #ffe9a8; }
 
 /* 商店 */
 .shophead { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }

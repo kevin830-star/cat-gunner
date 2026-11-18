@@ -26,8 +26,11 @@ const GRID_SIZE = 100; // 地面方格每格 100 像素
 const SHOCKWAVE_PUSH = GRID_SIZE * 5; // 冲击波震退五格 = 500 像素
 
 // ---------- 存档与设置 ----------
-const store = { best: 0, pinyin: true, mute: false, grade: 0 };
+const store = { best: 0, bestScore: 0, pinyin: true, mute: false, volume: 0.8, grade: 0 };
 try { Object.assign(store, JSON.parse(localStorage.getItem('catDefense') || '{}')); } catch (e) { /* 无存档 */ }
+if (!Number.isFinite(store.bestScore)) store.bestScore = 0;
+store.mute = Boolean(store.mute);
+store.volume = Number.isFinite(store.volume) ? clamp(store.volume, 0, 1) : 0.8;
 if (![0, 1, 2, 3].includes(store.grade)) store.grade = 0;
 const save = () => { try { localStorage.setItem('catDefense', JSON.stringify(store)); } catch (e) { /* 忽略 */ } };
 
@@ -52,26 +55,118 @@ function pickFromBank(bank, key) {
 }
 
 // ---------- 声音 ---------- (合成器在 sound.js)
-SFX.setMuted(() => store.mute);
-const initAudio = () => SFX.init();
-const sfx = new Proxy({}, { get: (_, name) => () => SFX.play(name) });
-function speak(text, interrupt = true) {
-  if (store.mute || !window.speechSynthesis || !text) return;
-  try {
-    const u = new SpeechSynthesisUtterance(text);
-    u.lang = 'zh-CN'; u.rate = interrupt ? 0.85 : 1;
-    if (interrupt) speechSynthesis.cancel();
-    else if (speechSynthesis.pending) speechSynthesis.cancel();   // 提示太多时只念最新的，不排长队
-    speechSynthesis.speak(u);
-  } catch (e) { /* 不支持朗读 */ }
+const isAudioMuted = () => store.mute || store.volume <= 0;
+function applyMasterAudio(playFeedback = false) {
+  SFX.setMuted(() => store.mute);
+  SFX.setVolume(store.volume);
+  if (isAudioMuted()) SFX.stopVoice();
+  if (playFeedback && !isAudioMuted()) SFX.play('switch');
 }
-// 屏幕上的中文提示同时用语音念出来：去掉拼音、表情符号和箭头
-function announce(text) {
-  const clean = String(text)
+applyMasterAudio(false);
+const initAudio = () => { SFX.init(); applyMasterAudio(false); };
+const sfx = new Proxy({}, { get: (_, name) => () => SFX.play(name) });
+function toggleMasterMute(showToast = false) {
+  store.mute = !store.mute;
+  if (!store.mute && store.volume <= 0) store.volume = 0.8;
+  save();
+  applyMasterAudio(true);
+  refreshToggles();
+  if (showToast && L) toast(isAudioMuted() ? '🔇 声音已静音' : `🔊 声音已开启 (${Math.round(store.volume * 100)}%)`);
+}
+function setMasterVolume(val) {
+  const v = clamp(Number(val), 0, 1);
+  store.volume = Math.round(v * 100) / 100;
+  store.mute = store.volume <= 0;
+  save();
+  applyMasterAudio(false);
+  refreshToggles();
+}
+
+const ttsCache = new Map();
+const ttsInFlight = new Map();
+let speakSeq = 0;
+let ttsStatusText = '';
+let ttsBusy = false;
+
+function voiceDisplayLabel() {
+  if (ttsStatusText) return `⚠️ ${ttsStatusText}`;
+  if (ttsBusy) return '🎙️ 语音：正在生成自然女声…';
+  return '🎙️ 语音：自然明媚女声 · Zephyr';
+}
+
+function formatSpeechText(text) {
+  return String(text)
+    .replace(/_{2,}/g, '什么')
     .replace(/[（(][^）)]*[A-Za-zāáǎàēéěèīíǐìōóǒòūúǔùǖǘǚǜü][^）)]*[）)]/g, '')
     .replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE0F}]/gu, '')
-    .replace(/[→·]/g, '，').replace(/\s+/g, ' ').trim();
-  speak(clean, false);
+    .replace(/[→·]/g, '，')
+    .replace(/[：；]/g, '，')
+    .replace(/——|……/g, '，')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+async function fetchTtsWav(clean, style) {
+  const key = `${style}|${clean}`;
+  const cached = ttsCache.get(key);
+  if (cached) return cached;
+
+  let req = ttsInFlight.get(key);
+  if (!req) {
+    req = (async () => {
+      const res = await fetch('/api/tts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: clean, style }),
+      });
+      if (!res.ok) {
+        let msg = `语音请求失败 (${res.status})`;
+        try { const data = await res.json(); if (data && data.error) msg = data.error; } catch (e) { /* ignore */ }
+        throw new Error(msg);
+      }
+      const buf = await res.arrayBuffer();
+      if (ttsCache.size >= 100) {
+        const oldest = ttsCache.keys().next().value;
+        ttsCache.delete(oldest);
+      }
+      ttsCache.set(key, buf);
+      return buf;
+    })().finally(() => {
+      ttsInFlight.delete(key);
+    });
+    ttsInFlight.set(key, req);
+  }
+  return req;
+}
+
+async function speak(text, interrupt = true) {
+  if (isAudioMuted() || !text) return;
+  const clean = formatSpeechText(text);
+  if (!clean) return;
+  const seq = ++speakSeq;
+  if (interrupt) SFX.stopVoice();
+  const style = interrupt
+    ? '自然明媚、元气亲切的年轻女声，标准普通话，吐字清晰温暖，像活泼可爱的少女老师'
+    : '活泼明媚、充满元气的少女解说女声，标准普通话，清脆利落';
+  try {
+    ttsBusy = !ttsCache.has(`${style}|${clean}`);
+    if (ttsBusy) refreshToggles();
+    const buf = await fetchTtsWav(clean, style);
+    ttsBusy = false;
+    ttsStatusText = '';
+    if (seq !== speakSeq || isAudioMuted()) { refreshToggles(); return; }
+    await SFX.playVoiceBuffer(buf, { interrupt });
+    refreshToggles();
+  } catch (err) {
+    ttsBusy = false;
+    ttsStatusText = err?.message || '语音合成失败';
+    refreshToggles();
+    if (L && interrupt) toast(ttsStatusText);
+  }
+}
+// 屏幕上的中文提示同时用语音念出来
+function announce(text) {
+  speak(text, false);
 }
 
 // ---------- 画布与镜头 ----------
@@ -94,6 +189,34 @@ for (let i = 0; i < 150; i++) {
   decor.push({ x: rand(0, WORLD.w), y: rand(0, WORLD.h), t: Math.random() < 0.35 ? 'flower' : 'tuft', c: ['#fff', '#ffe066', '#ffadc6'][randInt(0, 2)], s: rand(0.7, 1.3) });
 }
 
+// 背景漂浮微尘与星光粒子（三层视差，增加战场纵深感）
+let ambientT = 0;
+const AMBIENT_COLORS = ['#ffffff', '#fff8d6', '#ffeaa7', '#d9ffd6'];
+const AMBIENT_LAYERS = [
+  { count: 30, parallax: 0.35, rMin: 1.1, rMax: 2.0, vxMin: 6,  vxMax: 12, vyMin: -4,  vyMax: 4, aMin: 0.14, aMax: 0.28, starChance: 0.45 },
+  { count: 35, parallax: 0.60, rMin: 1.8, rMax: 3.0, vxMin: 10, vxMax: 20, vyMin: -7,  vyMax: 6, aMin: 0.16, aMax: 0.32, starChance: 0.25 },
+  { count: 20, parallax: 0.85, rMin: 2.4, rMax: 4.0, vxMin: 14, vxMax: 26, vyMin: -10, vyMax: 8, aMin: 0.14, aMax: 0.26, starChance: 0.20 },
+];
+const ambientMotes = [];
+for (const lay of AMBIENT_LAYERS) {
+  for (let i = 0; i < lay.count; i++) {
+    ambientMotes.push({
+      u: Math.random(), v: Math.random(),
+      parallax: lay.parallax,
+      r: rand(lay.rMin, lay.rMax),
+      vx: rand(lay.vxMin, lay.vxMax),
+      vy: rand(lay.vyMin, lay.vyMax),
+      alpha: rand(lay.aMin, lay.aMax),
+      color: AMBIENT_COLORS[randInt(0, AMBIENT_COLORS.length - 1)],
+      star: Math.random() < lay.starChance,
+      phase: rand(0, TAU),
+      swaySpd: rand(0.4, 1.1),
+      swayAmp: rand(4, 12),
+      twinkleSpd: rand(1.0, 2.6),
+    });
+  }
+}
+
 // ---------- 输入 ----------
 const keys = {};
 const mouse = { x: 0, y: 0, down: false };
@@ -111,9 +234,12 @@ window.addEventListener('keydown', e => {
     if (k === 'f') { useShockwave(); e.preventDefault(); }
     if (k === 'r') fireMissiles();
     if (k >= '1' && k <= '5') { const w = WEAPONS[+k - 1], t = bestTier(w.id); if (t >= 0) { G.eq = { id: w.id, tier: t }; sfx.switch(); } }
+    if (k === 'm') { initAudio(); toggleMasterMute(true); }
     if (k === 'p' || k === 'escape') pauseGame();
   } else if (state === 'paused' && (k === 'p' || k === 'escape')) {
     resumeGame();
+  } else if ((state === 'menu' || state === 'paused') && k === 'm') {
+    initAudio(); toggleMasterMute(false);
   } else if (state === 'quiz' && quiz) {
     if (!quiz.answered && k >= '1' && k <= '4') answerQuiz(+k - 1);
     else if (quiz.answered && (k === ' ' || k === 'enter')) { e.preventDefault(); finishQuiz(); }
@@ -260,7 +386,7 @@ function setState(s) {
 const freshRun = () => {
   const inv = freshInv(); inv.pistol[0] = 1;
   return {
-    level: 1, fish: 0, kills: 0,
+    level: 1, fish: 0, kills: 0, score: 0, maxCombo: 0,
     inv, eq: { id: 'pistol', tier: 0 },
     items: Object.fromEntries(ITEMS.map(it => [it.id, { n: 0, lv: 1 }])),
     unlockedItems: 1, // 开局只有猫薄荷，之后每击败一个头目按顺序解锁一个
@@ -280,7 +406,7 @@ function loadRun() {
     const d = JSON.parse(localStorage.getItem(SAVE_KEY));
     if (!d || !(d.level >= 1)) return null;
     const run = freshRun();
-    for (const k of ['level', 'fish', 'kills', 'nestHp', 'lastBonus', 'lastStars', 'lastStarBonus', 'lastCatLoss', 'lastNestLoss']) if (Number.isFinite(d[k])) run[k] = d[k];
+    for (const k of ['level', 'fish', 'kills', 'score', 'maxCombo', 'nestHp', 'lastBonus', 'lastStars', 'lastStarBonus', 'lastCatLoss', 'lastNestLoss']) if (Number.isFinite(d[k])) run[k] = d[k];
     run.miniPlayed = !!d.miniPlayed;
     // 旧版的解锁数量不包含开局就有的猫薄荷，所以要多算 1 个
     if (Number.isFinite(d.unlockedItems)) run.unlockedItems = clamp(Math.floor(d.unlockedItems) + (d.itemOrder === 2 ? 0 : 1), 1, ITEMS.length);
@@ -356,6 +482,8 @@ function startLevel() {
     drops: [], buffT: Object.fromEntries(BUFFS.filter(b => b.dur).map(b => [b.id, 0])),
     rings: [], bolts: [], helpers: [], trail: [], shAngle: 0, stormCd: 2, morphT: 0, stompT: 0, trailT: 0, form: null,
     eliteTimes: eliteSchedule(G.level), hordeTimes: hordeSchedule(G.level), notice: null, clearT: 0, fireworkT: 0,
+    combo: 0, comboT: 0, comboPop: 0, comboTierMin: 1, lastComboPts: 0, levelScore: 0, levelMaxCombo: 0, comboSplash: null,
+    comboBarVis: 0, comboBreakT: 0, comboBreak: null, comboFilter: 0,
   };
   camZoom = 1;
   announce(`第 ${G.level} 关，${L.isBoss ? '头目关，头目会在最后出现' : '保卫猫窝'}`);
@@ -832,12 +960,114 @@ function hordeBurst() {
   L.notice = { text: `敌人潮来了！从${['上方', '下方', '左边', '右边'][side]}涌来`, t: 3, color: '#ff9a8a' };
   sfx.horde();
 }
+// 连击系统：短时间内连续击败敌人可提升连击倍率，获得更高积分
+const COMBO_WINDOW = 3.2;
+const COMBO_TIERS = [
+  { min: 30, mult: 3.0, label: '猫咪传说', color: '#ff5e9a', bg: '#4e1535', bar: '#ffe066' },
+  { min: 20, mult: 2.5, label: '超级无敌', color: '#c48bff', bg: '#321b54', bar: '#d6a8ff' },
+  { min: 10, mult: 2.0, label: '势不可挡', color: '#ff6b5e', bg: '#5a1c15', bar: '#ffb347' },
+  { min: 5,  mult: 1.5, label: '火力全开', color: '#ffb347', bg: '#543210', bar: '#ffe066' },
+  { min: 2,  mult: 1.2, label: '连击开始', color: '#7ed957', bg: '#204518', bar: '#a7f37a' },
+  { min: 1,  mult: 1.0, label: '连击',     color: '#fff6df', bg: '#6b4a2e', bar: '#ffe066' },
+];
+function comboTier(combo) {
+  for (const t of COMBO_TIERS) if (combo >= t.min) return t;
+  return COMBO_TIERS[COMBO_TIERS.length - 1];
+}
+function enemyBasePoints(e) {
+  const d = ENEMIES[e.type];
+  const T = ETIERS[e.tier || 0];
+  let base = e.type === 'boss' ? 400 : e.type === 'elite' ? 120 : Math.max(10, Math.round((d.fish[0] + d.fish[1]) * 5));
+  base = Math.round(base * (e.type === 'boss' || e.type === 'elite' ? 1 : T.fish));
+  if (e.small) base = Math.max(5, Math.round(base * 0.4));
+  return base;
+}
+
+function triggerComboFx(x, y, combo, ct, tierUp) {
+  if (combo < 5) return;
+  const milestone = tierUp || combo % 5 === 0;
+  if (L.parts.length < 360) {
+    const scalePow = clamp(0.9 + combo * 0.04, 1, 2.1);
+    const sparkCount = milestone ? Math.min(26, 12 + Math.floor(combo * 0.5)) : Math.min(10, 4 + Math.floor(combo / 5));
+    const starCount = milestone ? Math.min(14, 6 + Math.floor(combo * 0.25)) : Math.min(5, 2 + Math.floor(combo / 8));
+    ring(x, y, (milestone ? 58 : 34) + Math.min(56, combo * 1.6), ct.color, milestone ? 0.42 : 0.26, milestone);
+    if (milestone) ring(x, y, 36 + Math.min(34, combo), '#fff7b0', 0.28);
+    L.parts.push({ x, y, vx: 0, vy: 0, life: milestone ? 0.28 : 0.18, max: milestone ? 0.28 : 0.18, k: 'flash', color: '#fff7b0', r: (milestone ? 22 : 13) + Math.min(16, combo * 0.45) });
+    for (let i = 0; i < sparkCount; i++) {
+      const a = (TAU * i) / sparkCount + rand(-0.22, 0.22);
+      const spd = rand(180, milestone ? 390 : 250) * (0.85 + 0.15 * scalePow);
+      L.parts.push({
+        x, y, vx: Math.cos(a) * spd, vy: Math.sin(a) * spd,
+        life: rand(0.22, milestone ? 0.44 : 0.28),
+        color: i % 3 === 0 ? '#fff7b0' : ct.color,
+        r: rand(2.2, milestone ? 4.2 : 3.0),
+        k: 'spark',
+      });
+    }
+    const palette = combo >= 20 ? [ct.color, '#ffe066', '#8cf0ff', '#fff'] : [ct.color, '#ffe066', '#fff7b0'];
+    for (let i = 0; i < starCount; i++) {
+      const a = rand(0, TAU), spd = rand(95, milestone ? 270 : 165);
+      const life = rand(0.32, milestone ? 0.62 : 0.4);
+      L.parts.push({
+        x, y, vx: Math.cos(a) * spd, vy: Math.sin(a) * spd,
+        life, max: life, k: 'cstar',
+        color: palette[i % palette.length],
+        r: rand(4.5, milestone ? 9.5 : 6.5),
+        spin: rand(-7, 7),
+      });
+    }
+    if (milestone) {
+      if (tierUp) {
+        ring(L.cat.x, L.cat.y, 82, ct.color, 0.45);
+        L.parts.push({ x: L.cat.x, y: L.cat.y, vx: 0, vy: 0, life: 0.24, max: 0.24, k: 'flash', color: ct.color, r: 24 });
+      }
+      L.shake = Math.max(L.shake, combo >= 20 ? 0.2 : combo >= 10 ? 0.14 : 0.09);
+    }
+  }
+  if (milestone) {
+    L.comboSplash = { combo, label: ct.label, mult: ct.mult, color: ct.color, t: 0.9, dur: 0.9 };
+  }
+}
+
 function damageEnemy(e, dmg) {
   if (e.dead) return;
   e.hp -= dmg; e.flash = 0.1;
   addText(e.x + rand(-6, 6), e.y - e.r - 4, String(Math.round(dmg)), '#fff7b0', 13);
   if (e.hp <= 0) {
     e.dead = true; G.kills++;
+    L.combo++;
+    L.comboT = COMBO_WINDOW;
+    L.comboPop = 1;
+    L.comboBreakT = 0;
+    L.comboBreak = null;
+    const ct = comboTier(L.combo);
+    const pts = Math.round(enemyBasePoints(e) * ct.mult);
+    G.score += pts;
+    L.levelScore += pts;
+    L.lastComboPts = pts;
+    if (L.combo > G.maxCombo) G.maxCombo = L.combo;
+    if (L.combo > L.levelMaxCombo) L.levelMaxCombo = L.combo;
+    const tierUp = ct.min > L.comboTierMin;
+    if (tierUp) {
+      L.comboTierMin = ct.min;
+      SFX.playCombo(L.combo, ct.min, true);
+      if (L.combo < 5) {
+        ring(L.cat.x, L.cat.y, 52, ct.color, 0.32);
+      } else {
+        addText(L.cat.x, L.cat.y - 46, `${L.combo} 连击！×${ct.mult.toFixed(1)} 积分`, ct.color, 17, 1.3);
+      }
+    } else if (L.combo >= 2) {
+      SFX.playCombo(L.combo, ct.min, false);
+    }
+    if (L.combo >= 5) {
+      triggerComboFx(e.x, e.y, L.combo, ct, tierUp);
+    }
+    if (L.combo >= 20) {
+      L.shake = Math.max(L.shake, L.combo >= 30 ? 0.16 : 0.11);
+    }
+    if (L.combo >= 2 || e.type === 'boss' || e.type === 'elite') {
+      addText(e.x + rand(-10, 10), e.y - e.r - 20, `+${pts}分`, ct.color, L.combo >= 10 ? 15 : 13, 0.95);
+    }
     const d = ENEMIES[e.type];
     burst(e.x, e.y, '#fff', e.type === 'boss' ? 30 : 8, e.type === 'boss' ? 260 : 130);
     const T = ETIERS[e.tier || 0];
@@ -865,7 +1095,7 @@ function damageEnemy(e, dmg) {
       if (Math.random() < BUFF_DROP_CHANCE + [0, 0.03, 0.14, 0.5][e.tier || 0]) dropBuff(e.x, e.y);
       if (d.splits && !e.small) splitSlime(e);
       if (e.tier >= 2) { burst(e.x, e.y, T.tint, 12, 200); L.shake = Math.max(L.shake, 0.12); }
-      sfx.kill();
+      if (!tierUp) sfx.kill();
     }
   }
 }
@@ -1101,6 +1331,37 @@ function update(rawDt) {
   L.elapsed += dt;
   L.time = Math.max(0, L.time - dt);
   L.banner -= rawDt; L.shake = Math.max(0, L.shake - rawDt); L.nestFlash = Math.max(0, L.nestFlash - rawDt);
+  if (L.comboT > 0) {
+    L.comboT = Math.max(0, L.comboT - dt);
+    const targetPct = L.comboT / COMBO_WINDOW;
+    if (L.comboBarVis < targetPct) {
+      L.comboBarVis = Math.min(targetPct, L.comboBarVis + rawDt * 14);
+    } else {
+      L.comboBarVis = targetPct;
+    }
+    if (L.comboT <= 0) {
+      if (L.combo >= 2) {
+        const lostTier = comboTier(L.combo);
+        L.comboBreakT = 0.4;
+        L.comboBreak = { combo: L.combo, mult: lostTier.mult, t: 0.72, dur: 0.72 };
+      }
+      L.combo = 0; L.comboTierMin = 1; L.comboBarVis = 0;
+    }
+  } else {
+    L.comboBarVis = 0;
+  }
+  const targetFilter = L.combo >= 30 ? 1 : L.combo >= 20 ? 0.72 : 0;
+  L.comboFilter += (targetFilter - L.comboFilter) * Math.min(1, rawDt * 4.5);
+  if (L.comboBreakT > 0) L.comboBreakT = Math.max(0, L.comboBreakT - rawDt);
+  if (L.comboBreak) {
+    L.comboBreak.t -= rawDt;
+    if (L.comboBreak.t <= 0) L.comboBreak = null;
+  }
+  if (L.comboPop > 0) L.comboPop = Math.max(0, L.comboPop - rawDt * 4.5);
+  if (L.comboSplash) {
+    L.comboSplash.t -= rawDt;
+    if (L.comboSplash.t <= 0) L.comboSplash = null;
+  }
   if (L.catnipT > 0) L.catnipT -= rawDt;
   else if (L.catnipCd > 0) L.catnipCd = Math.max(0, L.catnipCd - rawDt);
   if (L.shockwaveCd > 0) L.shockwaveCd = Math.max(0, L.shockwaveCd - rawDt);
@@ -1286,7 +1547,13 @@ function update(rawDt) {
   }
   L.drops = L.drops.filter(d => d.life > 0);
 
-  for (const p of L.parts) { p.x += p.vx * rawDt; p.y += p.vy * rawDt; p.life -= rawDt; }
+  for (const p of L.parts) {
+    p.x += p.vx * rawDt; p.y += p.vy * rawDt; p.life -= rawDt;
+    if (p.k === 'cstar') {
+      const drag = Math.max(0, 1 - 2.6 * rawDt);
+      p.vx *= drag; p.vy *= drag;
+    }
+  }
   for (const t of L.texts) { t.y -= 34 * rawDt; t.life -= rawDt; }
 
   L.enemies = L.enemies.filter(e => !e.dead);
@@ -1322,10 +1589,14 @@ function levelClear() {
   G.stars[G.level] = Math.max(G.stars[G.level] || 0, r.stars);
   G.miniPlayed = false;
   saveRun();
-  if (G.level > store.best) { store.best = G.level; save(); }
+  let saveCfg = false;
+  if (G.level > store.best) { store.best = G.level; saveCfg = true; }
+  if (G.score > store.bestScore) { store.bestScore = G.score; saveCfg = true; }
+  if (saveCfg) save();
   L.bullets = []; L.ebullets = []; L.drops = []; L.rings = []; L.bolts = []; L.trail = [];
   L.form = null; L.cat.kx = L.cat.ky = 0; L.redRageT = 0; camZoom = 1;
   L.clearT = 0; L.fireworkT = 0; L.notice = null; L.starSnd = 0;
+  L.combo = 0; L.comboT = 0; L.comboPop = 0; L.comboTierMin = 1; L.comboSplash = null; L.comboBarVis = 0; L.comboBreakT = 0; L.comboBreak = null; L.comboFilter = 0;
   for (const k in L.buffT) L.buffT[k] = 0;
   L.catnipT = 0;
   sfx.right();
@@ -1406,13 +1677,16 @@ function openShop() {
 function gameOver(reason) {
   camZoom = 1;
   const cleared = G.level - 1;
-  if (cleared > store.best) { store.best = cleared; save(); }
+  let saveCfg = false;
+  if (cleared > store.best) { store.best = cleared; saveCfg = true; }
+  if (G.score > store.bestScore) { store.bestScore = G.score; saveCfg = true; }
+  if (saveCfg) save();
   clearRun();
   sfx.wrong();
   setState('over');
   $('overBody').innerHTML = `
     <h2>${reason}</h2>
-    <div class="stat">到达：第 <b>${G.level}</b> 关<br>赶走入侵者：<b>${G.kills}</b> 只<br>最高纪录：通过 <b>${store.best}</b> 关</div>
+    <div class="stat">到达：第 <b>${G.level}</b> 关<br>本局积分：<b>${G.score}</b>（最高积分：<b>${store.bestScore}</b>）<br>赶走入侵者：<b>${G.kills}</b> 只 · 最高连击：<b>${G.maxCombo}</b><br>最高纪录：通过 <b>${store.best}</b> 关</div>
     <button class="big" data-action="start">再来一次</button><br>
     <button class="plain" data-action="toMenu">回到主菜单</button>`;
   show('over');
@@ -1997,18 +2271,39 @@ function shopAction(action, id) {
 let confirmNewRun = false;
 function refreshToggles() {
   const gInfo = GRADE_LEVELS.find(g => g.id === store.grade) || GRADE_LEVELS[0];
+  const muted = isAudioMuted();
+  const pct = Math.round(store.volume * 100);
   for (const n of [1, 2]) {
     if ($('tglGrade' + n)) $('tglGrade' + n).textContent = '题库：' + gInfo.short;
-    $('tglPinyin' + n).textContent = '拼音：' + (store.pinyin ? '开' : '关');
-    $('tglMute' + n).textContent = '声音：' + (store.mute ? '关' : '开');
+    if ($('tglPinyin' + n)) $('tglPinyin' + n).textContent = '拼音：' + (store.pinyin ? '开' : '关');
+    const panel = $('audioPanel' + n);
+    if (panel) {
+      panel.classList.toggle('muted', muted);
+      panel.classList.toggle('unmuted', !muted);
+    }
+    const btn = $('tglMute' + n);
+    if (btn) btn.setAttribute('aria-pressed', String(muted));
+    if ($('audioIcon' + n)) $('audioIcon' + n).textContent = muted ? '🔇' : '🔊';
+    if ($('audioLabel' + n)) $('audioLabel' + n).textContent = muted ? '声音已静音' : '声音已开启';
+    if ($('audioBadge' + n)) $('audioBadge' + n).textContent = muted ? '已静音' : '未静音';
+    if ($('volSlider' + n)) $('volSlider' + n).value = String(muted ? 0 : pct);
+    if ($('volPct' + n)) $('volPct' + n).textContent = (muted ? 0 : pct) + '%';
+    if ($('voiceTag' + n)) $('voiceTag' + n).textContent = voiceDisplayLabel();
   }
-  $('bestText').textContent = store.best ? `最高纪录：通过 ${store.best} 关` : '';
+  const bestParts = [];
+  if (store.best) bestParts.push(`通过 ${store.best} 关`);
+  if (store.bestScore) bestParts.push(`最高积分 ${store.bestScore}`);
+  $('bestText').textContent = bestParts.length ? `最高纪录：${bestParts.join(' · ')}` : '';
   const run = loadRun();
   $('btnContinue').style.display = run ? '' : 'none';
   if (run) $('btnContinue').textContent = `继续游戏（从第 ${run.level + 1} 关开始）`;
   confirmNewRun = false;
   $('btnStart').textContent = run ? '开始新游戏' : '开始游戏';
   $('btnStart').className = run ? 'tgl' : 'big';
+}
+for (const n of [1, 2]) {
+  const sl = $('volSlider' + n);
+  if (sl) sl.addEventListener('input', () => { initAudio(); setMasterVolume(sl.value / 100); });
 }
 document.addEventListener('click', e => {
   const b = e.target.closest('[data-action]');
@@ -2029,7 +2324,11 @@ document.addEventListener('click', e => {
     case 'toMenu': G = null; L = null; camZoom = 1; setState('menu'); refreshToggles(); show('menu'); break;
     case 'toggleGrade': store.grade = (store.grade + 1) % GRADE_LEVELS.length; save(); refreshToggles(); break;
     case 'togglePinyin': store.pinyin = !store.pinyin; save(); refreshToggles(); break;
-    case 'toggleMute': store.mute = !store.mute; save(); refreshToggles(); break;
+    case 'toggleMute': toggleMasterMute(false); break;
+    case 'testVoice':
+      if (isAudioMuted()) { store.mute = false; if (store.volume <= 0) store.volume = 0.8; save(); applyMasterAudio(false); refreshToggles(); }
+      speak('你好呀！我是小猫咪，今天也要元气满满地保卫猫窝哦！', true);
+      break;
     case 'quizAns': answerQuiz(+b.dataset.i); break;
     case 'quizDone': finishQuiz(); break;
     case 'examStart': if (exam) { exam.started = true; renderExam(); } break;
@@ -2077,6 +2376,34 @@ function drawGround() {
     }
   }
   ctx.strokeStyle = '#3f7d38'; ctx.lineWidth = 8; ctx.strokeRect(0, 0, WORLD.w, WORLD.h);
+}
+function drawAmbientMotes(vw, vh) {
+  const spanW = vw + 160, spanH = vh + 160;
+  for (const m of ambientMotes) {
+    const x0 = ((m.u * spanW + m.vx * ambientT - cam.x * m.parallax) % spanW + spanW) % spanW - 80;
+    const y0 = ((m.v * spanH + m.vy * ambientT - cam.y * m.parallax) % spanH + spanH) % spanH - 80;
+    const wx = cam.x + x0 + Math.sin(ambientT * m.swaySpd + m.phase) * m.swayAmp;
+    const wy = cam.y + y0 + Math.cos(ambientT * m.swaySpd * 0.8 + m.phase) * (m.swayAmp * 0.6);
+    const tw = 0.55 + 0.45 * Math.sin(ambientT * m.twinkleSpd + m.phase);
+    const a = m.alpha * tw;
+    ctx.globalAlpha = a * 0.32;
+    ctx.fillStyle = m.color;
+    ctx.beginPath(); ctx.arc(wx, wy, m.r * 2.1, 0, TAU); ctx.fill();
+    ctx.globalAlpha = a;
+    if (m.star) {
+      const sr = m.r * 1.55;
+      ctx.beginPath();
+      ctx.moveTo(wx, wy - sr);
+      ctx.quadraticCurveTo(wx, wy, wx + sr, wy);
+      ctx.quadraticCurveTo(wx, wy, wx, wy + sr);
+      ctx.quadraticCurveTo(wx, wy, wx - sr, wy);
+      ctx.quadraticCurveTo(wx, wy, wx, wy - sr);
+      ctx.fill();
+    } else {
+      ctx.beginPath(); ctx.arc(wx, wy, m.r, 0, TAU); ctx.fill();
+    }
+  }
+  ctx.globalAlpha = 1;
 }
 function drawFence() {
   if (!L || !ilv('fence')) return;
@@ -2768,7 +3095,264 @@ function updateItemBar() {
   }
 }
 
+function drawTopComboBar() {
+  if (!L || state !== 'playing') return;
+  const bw = Math.min(560, W - 20);
+  const bh = 6;
+  const bx = (W - bw) / 2;
+  const by = 1;
+  const active = L.combo > 0 && L.comboT > 0;
+  const pct = active ? clamp(L.comboBarVis, 0, 1) : 0;
+  const breaking = !active && L.comboBreakT > 0;
+  const ct = active ? comboTier(L.combo) : null;
+  const urgent = active && (L.comboT / COMBO_WINDOW) < 0.3;
+
+  ctx.save();
+  // 背景细长轨道：空闲时低透明度待命，连击或耗尽闪烁时高亮
+  ctx.globalAlpha = active ? 0.96 : breaking ? clamp(L.comboBreakT / 0.35, 0.35, 1) : 0.42;
+  ctx.fillStyle = OUT;
+  ctx.beginPath(); ctx.roundRect(bx - 1, by - 0.5, bw + 2, bh + 1.5, 4); ctx.fill();
+  ctx.fillStyle = breaking ? '#5a1b18' : '#2d1e12';
+  ctx.beginPath(); ctx.roundRect(bx, by, bw, bh, 3.5); ctx.fill();
+
+  if (active && pct > 0) {
+    const fw = Math.max(5, bw * pct);
+    if (urgent) {
+      ctx.fillStyle = Math.sin(performance.now() / 65) > 0 ? '#ff4d4d' : '#ff9a8a';
+    } else {
+      const grad = ctx.createLinearGradient(bx, 0, bx + bw, 0);
+      grad.addColorStop(0, ct.color);
+      grad.addColorStop(1, ct.bar);
+      ctx.fillStyle = grad;
+    }
+    ctx.beginPath(); ctx.roundRect(bx, by, fw, bh, 3.5); ctx.fill();
+
+    // 顶部高光条与右端衰减光点
+    ctx.fillStyle = 'rgba(255,255,255,0.45)';
+    ctx.beginPath(); ctx.roundRect(bx + 1, by + 0.8, Math.max(2, fw - 2), 1.8, 1); ctx.fill();
+
+    const tipX = bx + fw;
+    ctx.fillStyle = '#fff';
+    ctx.beginPath(); ctx.arc(tipX, by + bh / 2, 2.6, 0, TAU); ctx.fill();
+
+    if (L.comboPop > 0) {
+      ctx.globalAlpha = L.comboPop * 0.55;
+      ctx.fillStyle = '#fff7b0';
+      ctx.beginPath(); ctx.roundRect(bx, by, fw, bh, 3.5); ctx.fill();
+    }
+  } else if (breaking) {
+    ctx.strokeStyle = '#ff5e5e';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.roundRect(bx, by, bw, bh, 3.5); ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawComboMeter(narrow) {
+  if (!L || L.combo <= 0 || L.comboT <= 0 || state !== 'playing') return;
+  const ct = comboTier(L.combo);
+  const pct = clamp(L.comboT / COMBO_WINDOW, 0, 1);
+  const w = narrow ? 148 : 176, h = 58;
+  const rx = W - 12 - w, ry = narrow ? 108 : 74;
+  const popScale = 1 + 0.16 * Math.sin(L.comboPop * Math.PI * 0.5);
+  const alpha = L.comboT < 0.4 ? clamp(L.comboT / 0.4, 0, 1) : 1;
+
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.translate(rx + w / 2, ry + h / 2);
+  ctx.scale(popScale, popScale);
+  ctx.translate(-w / 2, -h / 2);
+
+  // 卡片阴影与主体
+  ctx.fillStyle = 'rgba(74, 52, 35, 0.35)';
+  ctx.beginPath(); ctx.roundRect(0, 4, w, h, 14); ctx.fill();
+
+  if (L.combo >= 30) {
+    const g = ctx.createLinearGradient(0, 0, w, h);
+    g.addColorStop(0, '#5a1840'); g.addColorStop(0.5, '#3b1c68'); g.addColorStop(1, '#5c2d12');
+    ctx.fillStyle = g;
+  } else {
+    ctx.fillStyle = ct.bg;
+  }
+  ctx.beginPath(); ctx.roundRect(0, 0, w, h, 14); ctx.fill();
+  ctx.lineWidth = 3; ctx.strokeStyle = OUT; ctx.stroke();
+
+  if (L.combo >= 5) {
+    ctx.save();
+    ctx.strokeStyle = ct.color;
+    ctx.globalAlpha = alpha * (0.45 + 0.25 * Math.sin(performance.now() / 110));
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.roundRect(3, 3, w - 6, h - 6, 11); ctx.stroke();
+    ctx.restore();
+  }
+
+  // 连击数 + "连击"
+  const numStr = `${L.combo}`;
+  ctx.font = `900 ${narrow ? 22 : 24}px "PingFang SC","Microsoft YaHei",sans-serif`;
+  ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+  ctx.lineWidth = 4; ctx.strokeStyle = OUT; ctx.lineJoin = 'round';
+  ctx.strokeText(numStr, 11, 20);
+  ctx.fillStyle = ct.color;
+  ctx.fillText(numStr, 11, 20);
+  const numW = ctx.measureText(numStr).width;
+
+  ctx.font = `bold ${narrow ? 12 : 13}px "PingFang SC","Microsoft YaHei",sans-serif`;
+  ctx.lineWidth = 3; ctx.strokeStyle = OUT;
+  ctx.strokeText('连击', 14 + numW, 22);
+  ctx.fillStyle = '#fff6df';
+  ctx.fillText('连击', 14 + numW, 22);
+
+  // 倍率徽章
+  const multText = `×${ct.mult.toFixed(1)}`;
+  ctx.font = `900 ${narrow ? 11 : 12}px sans-serif`;
+  const mw = Math.max(40, ctx.measureText(multText).width + 12);
+  const mx = w - mw - 9, my = 8, mh = 20;
+  ctx.fillStyle = L.combo >= 2 ? ct.color : '#fbe6bd';
+  ctx.beginPath(); ctx.roundRect(mx, my, mw, mh, 9); ctx.fill();
+  ctx.lineWidth = 2; ctx.strokeStyle = OUT; ctx.stroke();
+  ctx.fillStyle = OUT; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText(multText, mx + mw / 2, my + mh / 2 + 0.5);
+
+  // 状态名 & 最近加分
+  ctx.font = `bold 11px "PingFang SC","Microsoft YaHei",sans-serif`;
+  ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+  ctx.fillStyle = ct.color;
+  ctx.fillText(ct.label, 11, 38);
+  if (L.lastComboPts > 0) {
+    ctx.textAlign = 'right';
+    ctx.fillStyle = '#ffe9a8';
+    ctx.fillText(`+${L.lastComboPts}分`, w - 10, 38);
+  }
+
+  // 倒计时能量条
+  const bx = 10, by = h - 12, bw = w - 20, bh = 7;
+  ctx.fillStyle = '#2d1e12';
+  ctx.beginPath(); ctx.roundRect(bx, by, bw, bh, 4); ctx.fill();
+  if (pct > 0) {
+    const fw = Math.max(6, bw * pct);
+    const urgent = pct < 0.3;
+    ctx.fillStyle = urgent ? (Math.sin(performance.now() / 65) > 0 ? '#ff5e5e' : '#ff9a8a') : ct.bar;
+    ctx.beginPath(); ctx.roundRect(bx, by, fw, bh, 4); ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.4)';
+    ctx.beginPath(); ctx.roundRect(bx + 1, by + 1, Math.max(2, fw - 2), 2.5, 2); ctx.fill();
+  }
+
+  ctx.restore();
+}
+
+function drawComboSplash(narrow) {
+  if (!L || !L.comboSplash || L.comboSplash.t <= 0 || state !== 'playing') return;
+  const s = L.comboSplash;
+  const p = clamp(1 - s.t / s.dur, 0, 1);
+  let sc = 1;
+  if (p < 0.16) {
+    const u = p / 0.16;
+    sc = 0.35 + 0.95 * (1 - Math.pow(1 - u, 3));
+  } else if (p < 0.30) {
+    const u = (p - 0.16) / 0.14;
+    sc = 1.30 - 0.30 * u;
+  } else if (p < 0.72) {
+    sc = 1.0 + 0.04 * Math.sin((p - 0.30) * 18);
+  } else {
+    const u = (p - 0.72) / 0.28;
+    sc = 1.0 + 0.22 * u;
+  }
+  const alpha = p < 0.08 ? p / 0.08 : p > 0.72 ? clamp(1 - (p - 0.72) / 0.28, 0, 1) : 1;
+  const dy = p > 0.72 ? -26 * ((p - 0.72) / 0.28) : 0;
+  const cx = W / 2, cy = H * 0.38 + dy;
+
+  ctx.save();
+  ctx.translate(cx, cy);
+
+  // 中心扩散光环与柔光背景
+  const ringP = Math.min(1, p / 0.55);
+  if (ringP < 1) {
+    ctx.save();
+    ctx.globalAlpha = alpha * (1 - ringP) * 0.55;
+    ctx.strokeStyle = s.color;
+    ctx.lineWidth = Math.max(2, 6 * (1 - ringP));
+    ctx.beginPath();
+    ctx.arc(0, 0, (narrow ? 48 : 66) + ringP * (narrow ? 72 : 105), 0, TAU);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  ctx.globalAlpha = alpha * 0.32;
+  const glowR = narrow ? 92 : 128;
+  const rg = ctx.createRadialGradient(0, 0, 8, 0, 0, glowR);
+  rg.addColorStop(0, s.color);
+  rg.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = rg;
+  ctx.beginPath(); ctx.arc(0, 0, glowR, 0, TAU); ctx.fill();
+
+  ctx.globalAlpha = alpha;
+  ctx.scale(sc, sc);
+
+  const numSz = narrow ? 44 : 58;
+  const tagSz = narrow ? 20 : 26;
+  ctx.font = `900 ${numSz}px "PingFang SC","Microsoft YaHei",sans-serif`;
+  const numStr = `${s.combo}`;
+  const numW = ctx.measureText(numStr).width;
+  ctx.font = `900 ${tagSz}px "PingFang SC","Microsoft YaHei",sans-serif`;
+  const tagStr = ' 连击!';
+  const tagW = ctx.measureText(tagStr).width;
+  const totalW = numW + tagW;
+  const startX = -totalW / 2;
+
+  ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; ctx.lineJoin = 'round';
+  ctx.font = `900 ${numSz}px "PingFang SC","Microsoft YaHei",sans-serif`;
+  ctx.lineWidth = Math.max(6, numSz / 6); ctx.strokeStyle = OUT;
+  ctx.strokeText(numStr, startX, -4);
+  ctx.fillStyle = s.color;
+  ctx.fillText(numStr, startX, -4);
+
+  ctx.font = `900 ${tagSz}px "PingFang SC","Microsoft YaHei",sans-serif`;
+  ctx.lineWidth = Math.max(4, tagSz / 5); ctx.strokeStyle = OUT;
+  ctx.strokeText(tagStr, startX + numW, 4);
+  ctx.fillStyle = '#fff6df';
+  ctx.fillText(tagStr, startX + numW, 4);
+
+  outlined(`${s.label} · ×${s.mult.toFixed(1)} 积分`, 0, narrow ? 28 : 35, narrow ? 15 : 18, '#ffe9a8', 'center');
+  ctx.restore();
+}
+
+function drawComboPenalty(narrow) {
+  if (!L || !L.comboBreak || L.comboBreak.t <= 0 || state !== 'playing') return;
+  const b = L.comboBreak;
+  const p = clamp(1 - b.t / b.dur, 0, 1);
+  // 短暂淡入（0~0.18）-> 停留 -> 平滑淡出（0.45~1.0）
+  const alpha = p < 0.18 ? p / 0.18 : p > 0.45 ? clamp(1 - (p - 0.45) / 0.55, 0, 1) : 1;
+  const dropY = p * 14;
+  const jx = p < 0.25 ? Math.sin(p * 85) * 4 * (1 - p / 0.25) : 0;
+
+  ctx.save();
+  // 四周暗红冷却边缘闪光，制造连击中断的紧迫惩罚感
+  const vg = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.3, W / 2, H / 2, Math.max(W, H) * 0.78);
+  vg.addColorStop(0, 'rgba(30, 10, 12, 0)');
+  vg.addColorStop(1, `rgba(175, 36, 42, ${0.26 * alpha})`);
+  ctx.fillStyle = vg;
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.globalAlpha = alpha;
+  const cx = W / 2 + jx, cy = H * 0.29 + dropY;
+  outlined('连击重置！', cx, cy, narrow ? 24 : 30, '#ff8b85', 'center');
+  outlined(`${b.combo} 连击 · ×${b.mult.toFixed(1)} 积分已清空`, cx, cy + (narrow ? 24 : 28), narrow ? 13 : 15, '#ffd7d2', 'center');
+  ctx.restore();
+}
+
 function drawHUD() {
+  // 连击 >= 20 高燃战斗边缘氛围晕影
+  if (L && L.comboFilter > 0.02 && state === 'playing') {
+    const f = L.comboFilter;
+    const pulse = 0.85 + 0.15 * Math.sin(performance.now() / 110);
+    const g = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.34, W / 2, H / 2, Math.max(W, H) * 0.76);
+    g.addColorStop(0, 'rgba(0, 0, 0, 0)');
+    g.addColorStop(1, L.combo >= 30
+      ? `rgba(255, 72, 158, ${0.22 * f * pulse})`
+      : `rgba(168, 92, 255, ${0.18 * f * pulse})`);
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, H);
+  }
   // 答对中文题后的慢镜头特写边缘金光氛围晕影
   if (L && L.redRageT > 0 && state === 'playing') {
     const g = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.28, W / 2, H / 2, Math.max(W, H) * 0.72);
@@ -2785,7 +3369,12 @@ function drawHUD() {
   outlined(`第 ${G.level} 关`, cx, 18, 17, '#fff', al);
   if (L.time > 0) outlined(`${Math.ceil(L.time)} 秒`, cx, 42, 22, L.time <= 10 ? '#ffe066' : '#fff', al);
   else outlined(L.boss ? '打败头目！' : '过关！', cx, 42, 20, L.boss ? '#ff9a8a' : '#c9ff9e', al);
-  outlined(`🐟 ${G.fish}`, narrow ? W - 58 : W - 60, narrow ? 68 : 28, 18, '#ffe9a8', 'right');
+  outlined(`🐟 ${G.fish}`, narrow ? W - 58 : W - 60, narrow ? 68 : 26, 18, '#ffe9a8', 'right');
+  outlined(`⭐ ${G.score}`, narrow ? W - 58 : W - 60, narrow ? 90 : 50, 15, '#ffe066', 'right');
+  drawTopComboBar();
+  drawComboMeter(narrow);
+  drawComboSplash(narrow);
+  drawComboPenalty(narrow);
   const w = weaponDef(G.eq.id);
   let y = 66;
   ctx.drawImage(ICONS.canvas[w.id], 8, y - 15, 30, 30);
@@ -2851,6 +3440,7 @@ function drawHUD() {
       ctx.globalAlpha = clamp((t - tInfo + 0.2) * 3, 0, 1);
       outlined(['', '再稳一点就能拿更多星！', '不错！', '完美！'][G.lastStars], cx, lay.y0 + 216 * u, 22 * u, G.lastStars === 3 ? '#ffe066' : '#fff');
       outlined(`过关奖励 +${G.lastBonus} 🐟${G.lastStarBonus ? `  星级奖励 +${G.lastStarBonus} 🐟` : ''}`, cx, lay.y0 + 244 * u, 17 * u, '#ffe9a8');
+      outlined(`本关积分 +${L.levelScore}${L.levelMaxCombo >= 2 ? `  最高连击 ${L.levelMaxCombo}` : ''}  总积分 ${G.score}`, cx, lay.y0 + 270 * u, 15 * u, '#fff');
       ctx.globalAlpha = 1;
     }
     if (t > STARS_DONE) { ctx.globalAlpha = 0.6 + 0.4 * Math.sin(t * 6); outlined('点击屏幕继续', cx, H * 0.86, 15, '#fff'); ctx.globalAlpha = 1; }
@@ -2872,10 +3462,28 @@ function render() {
   cam.x = vw >= WORLD.w ? (WORLD.w - vw) / 2 : clamp(focus.x - vw / 2, 0, WORLD.w - vw);
   cam.y = vh >= WORLD.h ? (WORLD.h - vh) / 2 : clamp(focus.y - vh / 2, 0, WORLD.h - vh);
   let shx = 0, shy = 0;
-  if (L && L.shake > 0 && state === 'playing') { shx = rand(-4, 4); shy = rand(-4, 4); }
+  if (L && state === 'playing') {
+    if (L.shake > 0) {
+      const amp = L.combo >= 30 ? 6.5 : L.combo >= 20 ? 5.2 : 4;
+      shx += rand(-amp, amp); shy += rand(-amp, amp);
+    }
+    if (L.combo >= 20) {
+      const hum = L.combo >= 30 ? 1.8 : 1.1;
+      shx += rand(-hum, hum); shy += rand(-hum, hum);
+    }
+  }
   ctx.save();
+  if ('filter' in ctx) {
+    if (L && L.comboFilter > 0.02 && state === 'playing') {
+      const f = L.comboFilter;
+      ctx.filter = `saturate(${(1 + 0.22 * f).toFixed(3)}) contrast(${(1 + 0.06 * f).toFixed(3)}) hue-rotate(${(-10 * f).toFixed(2)}deg)`;
+    } else {
+      ctx.filter = 'none';
+    }
+  }
   ctx.scale(effScale, effScale); ctx.translate(-cam.x + shx, -cam.y + shy);
   drawGround();
+  drawAmbientMotes(vw, vh);
   drawFence();
   if (!L) { drawNest(); ctx.restore(); return; }
   for (const e of L.enemies) drawTelegraph(e);
@@ -2918,6 +3526,14 @@ function render() {
     } else if (p.k === 'flash') {
       const q = p.life / p.max; ctx.globalAlpha = clamp(q * 1.5, 0, 1);
       flashStar(p.x, p.y, p.r * (1.3 - 0.5 * q), p.color);
+    } else if (p.k === 'cstar') {
+      const q = clamp(p.life / (p.max || 0.45), 0, 1);
+      ctx.globalAlpha = clamp(q * 1.4, 0, 1);
+      ctx.save();
+      ctx.translate(p.x, p.y);
+      ctx.rotate((1 - q) * (p.spin || 3));
+      drawStar(0, 0, p.r * (0.45 + 0.65 * q), p.color, OUT, 1.5);
+      ctx.restore();
     } else {
       ctx.globalAlpha = clamp(p.life * 3, 0, 1);
       ell(p.x, p.y, p.r, p.r, p.color);
@@ -2927,6 +3543,7 @@ function render() {
   for (const t of L.texts) { ctx.globalAlpha = clamp(t.life * 2, 0, 1); outlined(t.text, t.x, t.y, t.size, t.color); }
   ctx.globalAlpha = 1;
   ctx.restore();
+  if ('filter' in ctx) ctx.filter = 'none';
   drawHUD();
 }
 
@@ -2935,6 +3552,7 @@ let last = performance.now();
 function frame(now) {
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
+  if (state === 'playing' || state === 'clear' || state === 'menu') ambientT += dt;
   if (state === 'playing') update(dt);
   else if (state === 'clear') updateClear(dt);
   render();

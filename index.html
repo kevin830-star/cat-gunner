@@ -4,6 +4,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>猫咪保卫战</title>
+<meta name="description" content="保卫猫窝，顺便学中文！一款结合 2D 俯视角射击与分级中文学习的网页游戏。">
+<meta property="og:title" content="猫咪保卫战">
+<meta property="og:description" content="保卫猫窝，顺便学中文！一款结合 2D 俯视角射击与分级中文学习的网页游戏。">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -27,7 +30,23 @@
     <div class="toggles">
       <button data-action="toggleGrade" class="tgl" id="tglGrade1"></button>
       <button data-action="togglePinyin" class="tgl" id="tglPinyin1"></button>
-      <button data-action="toggleMute" class="tgl" id="tglMute1"></button>
+    </div>
+    <div class="audio-panel unmuted" id="audioPanel1" role="group" aria-label="主音量控制">
+      <button data-action="toggleMute" class="tgl audio-btn" id="tglMute1" aria-pressed="false">
+        <span class="audio-dot" aria-hidden="true"></span>
+        <span class="audio-icon" id="audioIcon1" aria-hidden="true">🔊</span>
+        <span class="audio-label" id="audioLabel1">声音已开启</span>
+        <span class="audio-badge" id="audioBadge1">未静音</span>
+      </button>
+      <label class="vol-wrap" for="volSlider1">
+        <span class="vol-ttl">音量</span>
+        <input type="range" min="0" max="100" step="5" value="80" class="vol-slider" id="volSlider1" aria-label="主音量">
+        <span class="vol-pct" id="volPct1">80%</span>
+      </label>
+      <div class="audio-voice-row">
+        <span class="voice-tag" id="voiceTag1">🎙️ 语音：自然明媚女声</span>
+        <button data-action="testVoice" class="tgl voice-test-btn" type="button">试听语音</button>
+      </div>
     </div>
     <p class="best" id="bestText"></p>
   </div>
@@ -41,7 +60,23 @@
     <div class="toggles">
       <button data-action="toggleGrade" class="tgl" id="tglGrade2"></button>
       <button data-action="togglePinyin" class="tgl" id="tglPinyin2"></button>
-      <button data-action="toggleMute" class="tgl" id="tglMute2"></button>
+    </div>
+    <div class="audio-panel unmuted" id="audioPanel2" role="group" aria-label="主音量控制">
+      <button data-action="toggleMute" class="tgl audio-btn" id="tglMute2" aria-pressed="false">
+        <span class="audio-dot" aria-hidden="true"></span>
+        <span class="audio-icon" id="audioIcon2" aria-hidden="true">🔊</span>
+        <span class="audio-label" id="audioLabel2">声音已开启</span>
+        <span class="audio-badge" id="audioBadge2">未静音</span>
+      </button>
+      <label class="vol-wrap" for="volSlider2">
+        <span class="vol-ttl">音量</span>
+        <input type="range" min="0" max="100" step="5" value="80" class="vol-slider" id="volSlider2" aria-label="主音量">
+        <span class="vol-pct" id="volPct2">80%</span>
+      </label>
+      <div class="audio-voice-row">
+        <span class="voice-tag" id="voiceTag2">🎙️ 语音：自然明媚女声</span>
+        <button data-action="testVoice" class="tgl voice-test-btn" type="button">试听语音</button>
+      </div>
     </div>
     <button class="plain" data-action="toMenu">回到主菜单（本关要重打）</button>
   </div>
