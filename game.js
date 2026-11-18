@@ -84,14 +84,93 @@ function setMasterVolume(val) {
 
 const ttsCache = new Map();
 const ttsInFlight = new Map();
+const staticVoiceMap = Object.create(null);
+let voiceStats = { total: 224, cached: 0 };
 let speakSeq = 0;
 let ttsStatusText = '';
 let ttsBusy = false;
+let ttsPregenBusy = false;
+let ttsQuotaLimited = false;
+let zhBrowserVoice = null;
+const lastAnnounce = { text: '', at: 0 };
+
+function pickBrowserVoice() {
+  if (!window.speechSynthesis) return null;
+  const voices = window.speechSynthesis.getVoices() || [];
+  if (!voices.length) return null;
+  const zh = voices.filter(v => /^zh/i.test(v.lang || ''));
+  if (!zh.length) return null;
+  const preferred = zh.find(v => /Xiaoxiao|Xiaoyi|Huihui|Ting-?Ting|Meijia|Yaoyao|Google\s*普通话|Microsoft.*Chinese.*(Female|Online|Natural)/i.test(v.name));
+  return preferred || zh.find(v => /zh[-_]CN/i.test(v.lang)) || zh[0];
+}
+if (window.speechSynthesis) {
+  zhBrowserVoice = pickBrowserVoice();
+  try { window.speechSynthesis.onvoiceschanged = () => { zhBrowserVoice = pickBrowserVoice(); }; } catch (e) { /* ignore */ }
+}
+
+function speakBrowser(clean, { interrupt = true, seq = speakSeq } = {}) {
+  if (isAudioMuted() || !clean || !window.speechSynthesis) return false;
+  const run = () => {
+    if (isAudioMuted() || (interrupt && seq !== speakSeq)) return;
+    if (interrupt) SFX.stopVoice();
+    try {
+      const u = new SpeechSynthesisUtterance(clean);
+      u.lang = 'zh-CN';
+      const voice = zhBrowserVoice || pickBrowserVoice();
+      if (voice) { zhBrowserVoice = voice; u.voice = voice; }
+      u.volume = clamp(store.volume, 0, 1);
+      u.rate = 1.05;
+      u.pitch = 1.08;
+      window.speechSynthesis.speak(u);
+    } catch (e) { /* ignore */ }
+  };
+  if (interrupt) {
+    run();
+  } else if (SFX.isVoicePlaying()) {
+    SFX.onVoiceIdle(() => {
+      if (seq === speakSeq) run();
+    });
+  } else {
+    run();
+  }
+  return true;
+}
+
+async function loadVoiceArchive() {
+  try {
+    const [mRes, sRes] = await Promise.all([
+      fetch('/voices/manifest.json', { cache: 'no-store' }),
+      fetch('/api/tts/status', { cache: 'no-store' }),
+    ]);
+    if (mRes.ok) {
+      const m = await mRes.json();
+      if (m && m.phrases && typeof m.phrases === 'object') {
+        for (const k of Object.keys(staticVoiceMap)) delete staticVoiceMap[k];
+        Object.assign(staticVoiceMap, m.phrases);
+      }
+    }
+    if (sRes.ok) {
+      const s = await sRes.json();
+      if (Number.isFinite(s?.total)) voiceStats = { total: s.total, cached: s.cached || 0 };
+    }
+    refreshToggles();
+  } catch {
+    // Ignore startup archive check errors
+  }
+}
+loadVoiceArchive();
 
 function voiceDisplayLabel() {
+  if (ttsPregenBusy) return `🎙️ 正在预生成题库语音…（已存档 ${voiceStats.cached}/${voiceStats.total}）`;
   if (ttsStatusText) return `⚠️ ${ttsStatusText}`;
-  if (ttsBusy) return '🎙️ 语音：正在生成自然女声…';
-  return '🎙️ 语音：自然明媚女声 · Zephyr';
+  if (ttsBusy) return '🎙️ 语音：正在生成优化女声…';
+  if (ttsQuotaLimited) {
+    return `🎙️ 语音：浏览器托底中 · 优化女声已存档 (${voiceStats.cached}/${voiceStats.total})`;
+  }
+  if (voiceStats.total > 0 && voiceStats.cached >= voiceStats.total) {
+    return `🎙️ 语音：优化女声已全量存档 (${voiceStats.cached}/${voiceStats.total}) + 浏览器托底`;
+  }
+  return `🎙️ 语音：优化女声 (${voiceStats.cached}/${voiceStats.total}) + 浏览器托底`;
 }
 
 function formatSpeechText(text) {
@@ -114,6 +193,19 @@ async function fetchTtsWav(clean, style) {
   let req = ttsInFlight.get(key);
   if (!req) {
     req = (async () => {
+      const staticFile = staticVoiceMap[clean];
+      if (staticFile) {
+        const sRes = await fetch(`/voices/${staticFile}`);
+        if (sRes.ok) {
+          const buf = await sRes.arrayBuffer();
+          if (ttsCache.size >= 100) {
+            const oldest = ttsCache.keys().next().value;
+            ttsCache.delete(oldest);
+          }
+          ttsCache.set(key, buf);
+          return buf;
+        }
+      }
       const res = await fetch('/api/tts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -121,8 +213,16 @@ async function fetchTtsWav(clean, style) {
       });
       if (!res.ok) {
         let msg = `语音请求失败 (${res.status})`;
-        try { const data = await res.json(); if (data && data.error) msg = data.error; } catch (e) { /* ignore */ }
-        throw new Error(msg);
+        let code = '';
+        try {
+          const data = await res.json();
+          if (data && data.error) msg = data.error;
+          if (data && data.code) code = data.code;
+        } catch (e) { /* ignore */ }
+        const err = new Error(msg);
+        err.status = res.status;
+        err.code = code;
+        throw err;
       }
       const buf = await res.arrayBuffer();
       if (ttsCache.size >= 100) {
@@ -130,6 +230,7 @@ async function fetchTtsWav(clean, style) {
         ttsCache.delete(oldest);
       }
       ttsCache.set(key, buf);
+      loadVoiceArchive();
       return buf;
     })().finally(() => {
       ttsInFlight.delete(key);
@@ -139,34 +240,91 @@ async function fetchTtsWav(clean, style) {
   return req;
 }
 
-async function speak(text, interrupt = true) {
+async function pregenerateAllVoices() {
+  if (ttsPregenBusy) return;
+  ttsPregenBusy = true;
+  ttsStatusText = '';
+  refreshToggles();
+  try {
+    const res = await fetch('/api/tts/pregenerate', { method: 'POST' });
+    const data = await res.json().catch(() => ({}));
+    if (Number.isFinite(data?.total)) voiceStats = { total: data.total, cached: data.cached || 0 };
+    await loadVoiceArchive();
+    if (!res.ok) {
+      if (res.status === 429 || data?.code === 'RESOURCE_EXHAUSTED') ttsQuotaLimited = true;
+      ttsStatusText = data?.error || `预生成失败 (${res.status})`;
+    } else {
+      ttsQuotaLimited = false;
+      ttsStatusText = '';
+    }
+  } catch (err) {
+    ttsStatusText = err?.message || '预生成请求失败';
+  } finally {
+    ttsPregenBusy = false;
+    refreshToggles();
+  }
+}
+
+async function speak(text, interrupt = true, { manual = false, allowApi = true } = {}) {
   if (isAudioMuted() || !text) return;
   const clean = formatSpeechText(text);
   if (!clean) return;
-  const seq = ++speakSeq;
-  if (interrupt) SFX.stopVoice();
   const style = interrupt
     ? '自然明媚、元气亲切的年轻女声，标准普通话，吐字清晰温暖，像活泼可爱的少女老师'
     : '活泼明媚、充满元气的少女解说女声，标准普通话，清脆利落';
+  const cacheKey = `${style}|${clean}`;
+  const isCached = ttsCache.has(cacheKey) || Boolean(staticVoiceMap[clean]);
+  const seq = interrupt ? ++speakSeq : speakSeq;
+  if (interrupt) SFX.stopVoice();
+
+  // 无已生成的优化语音时：战斗播报(allowApi=false)或配额已用尽时直接使用浏览器语音托底
+  if (!isCached && (!allowApi || (ttsQuotaLimited && !manual))) {
+    speakBrowser(clean, { interrupt, seq });
+    return;
+  }
+
   try {
-    ttsBusy = !ttsCache.has(`${style}|${clean}`);
+    ttsBusy = !isCached;
     if (ttsBusy) refreshToggles();
     const buf = await fetchTtsWav(clean, style);
     ttsBusy = false;
-    ttsStatusText = '';
+    if (!isCached) {
+      ttsQuotaLimited = false;
+      ttsStatusText = '';
+    }
     if (seq !== speakSeq || isAudioMuted()) { refreshToggles(); return; }
-    await SFX.playVoiceBuffer(buf, { interrupt });
+    const played = await SFX.playVoiceBuffer(buf, { interrupt });
+    if (!played && !interrupt && seq === speakSeq && !isAudioMuted()) {
+      if (SFX.isVoicePlaying()) {
+        SFX.onVoiceIdle(() => {
+          if (seq === speakSeq && !isAudioMuted()) SFX.playVoiceBuffer(buf, { interrupt: false });
+        });
+      } else if (window.speechSynthesis && window.speechSynthesis.speaking) {
+        speakBrowser(clean, { interrupt: false, seq });
+      }
+    }
     refreshToggles();
   } catch (err) {
     ttsBusy = false;
-    ttsStatusText = err?.message || '语音合成失败';
+    if (err?.status === 429 || err?.code === 'RESOURCE_EXHAUSTED') {
+      ttsQuotaLimited = true;
+    }
+    if (manual) ttsStatusText = err?.message || '在线语音不可用，已切换浏览器语音';
     refreshToggles();
-    if (L && interrupt) toast(ttsStatusText);
+    if (seq === speakSeq && !isAudioMuted()) {
+      speakBrowser(clean, { interrupt, seq });
+    }
   }
 }
-// 屏幕上的中文提示同时用语音念出来
 function announce(text) {
-  speak(text, false);
+  if (isAudioMuted() || !text) return;
+  const clean = formatSpeechText(text);
+  if (!clean) return;
+  const now = performance.now();
+  if (clean === lastAnnounce.text && now - lastAnnounce.at < 1500) return;
+  lastAnnounce.text = clean;
+  lastAnnounce.at = now;
+  speak(clean, false, { allowApi: false });
 }
 
 // ---------- 画布与镜头 ----------
@@ -1031,7 +1189,8 @@ function triggerComboFx(x, y, combo, ct, tierUp) {
 
 function damageEnemy(e, dmg) {
   if (e.dead) return;
-  e.hp -= dmg; e.flash = 0.1;
+  if (e.hpTrail === undefined) e.hpTrail = e.hp;
+  e.hp -= dmg; e.flash = 0.12;
   addText(e.x + rand(-6, 6), e.y - e.r - 4, String(Math.round(dmg)), '#fff7b0', 13);
   if (e.hp <= 0) {
     e.dead = true; G.kills++;
@@ -1128,7 +1287,7 @@ function applyBuff(b) {
   addText(c.x, c.y - 24, b.tip + '!', '#fff', 14, 1.6);
   burst(c.x, c.y, b.color, 22, 240);
   sfx.transform();
-  speak(b.name);
+  announce(`${b.name}，${b.tip}`);
 }
 
 function hurtCat(dmg) {
@@ -1449,7 +1608,10 @@ function update(rawDt) {
   const frozen = L.buffT.freeze > 0;
   for (const e of L.enemies) {
     const d = ENEMIES[e.type];
-    e.flash -= rawDt;
+    e.flash = Math.max(0, e.flash - rawDt);
+    if (e.hpTrail === undefined) e.hpTrail = e.hp;
+    else if (e.hpTrail > e.hp) e.hpTrail = Math.max(e.hp, e.hpTrail - Math.max(e.maxHp * 0.65, (e.hpTrail - e.hp) * 7) * rawDt);
+    else e.hpTrail = e.hp;
     // 处理冲击波的后退五格（500 像素）平滑高速震退位移
     if (e.shockDist > 0) {
       const step = Math.min(e.shockDist, 1800 * rawDt);
@@ -2289,6 +2451,12 @@ function refreshToggles() {
     if ($('volSlider' + n)) $('volSlider' + n).value = String(muted ? 0 : pct);
     if ($('volPct' + n)) $('volPct' + n).textContent = (muted ? 0 : pct) + '%';
     if ($('voiceTag' + n)) $('voiceTag' + n).textContent = voiceDisplayLabel();
+    const pg = $('voicePregen' + n);
+    if (pg) {
+      const done = voiceStats.total > 0 && voiceStats.cached >= voiceStats.total;
+      pg.disabled = ttsPregenBusy || done;
+      pg.textContent = ttsPregenBusy ? '生成中…' : done ? '已全量存档' : '预生成语音';
+    }
   }
   const bestParts = [];
   if (store.best) bestParts.push(`通过 ${store.best} 关`);
@@ -2325,9 +2493,12 @@ document.addEventListener('click', e => {
     case 'toggleGrade': store.grade = (store.grade + 1) % GRADE_LEVELS.length; save(); refreshToggles(); break;
     case 'togglePinyin': store.pinyin = !store.pinyin; save(); refreshToggles(); break;
     case 'toggleMute': toggleMasterMute(false); break;
+    case 'pregenVoice':
+      pregenerateAllVoices();
+      break;
     case 'testVoice':
       if (isAudioMuted()) { store.mute = false; if (store.volume <= 0) store.volume = 0.8; save(); applyMasterAudio(false); refreshToggles(); }
-      speak('你好呀！我是小猫咪，今天也要元气满满地保卫猫窝哦！', true);
+      speak('你好呀！我是小猫咪，今天也要元气满满地保卫猫窝哦！', true, { manual: true });
       break;
     case 'quizAns': answerQuiz(+b.dataset.i); break;
     case 'quizDone': finishQuiz(); break;
@@ -2336,7 +2507,7 @@ document.addEventListener('click', e => {
     case 'examNext': nextExam(); break;
     case 'examRevive': reviveFromExam(); break;
     case 'examFail': case 'examGiveUp': gameOver(exam ? exam.reason : '闯关失败'); break;
-    case 'speak': speak(b.dataset.t); break;
+    case 'speak': speak(b.dataset.t, true, { manual: true }); break;
     case 'mini': openMini(); break;
     case 'miniAns': answerMini(+b.dataset.i); break;
     case 'miniNext': nextMini(); break;
@@ -2775,6 +2946,7 @@ function ellRot(x, y, rx, ry, rot, fill, stroke) {
 }
 
 const ctxReal = ctx;
+let ctxBase = ctxReal;
 let tintRgb = null, tintAmt = 0;
 const tintCache = new Map();
 function tintColor(col) {
@@ -2788,21 +2960,31 @@ function tintColor(col) {
   tintCache.set(key, out);
   return out;
 }
-const boundFns = new Map();
+const boundFnCache = new WeakMap();
+function getBoundFn(base, k, fn) {
+  let map = boundFnCache.get(base);
+  if (!map) { map = new Map(); boundFnCache.set(base, map); }
+  let bound = map.get(k);
+  if (!bound) { bound = fn.bind(base); map.set(k, bound); }
+  return bound;
+}
 const ctxTinted = new Proxy(ctxReal, {
-  get(t, k) {
-    const v = t[k];
-    if (typeof v !== 'function') return v;
-    let f = boundFns.get(k); if (!f) { f = v.bind(t); boundFns.set(k, f); }
-    return f;
+  get(_t, k) {
+    const v = ctxBase[k];
+    return typeof v === 'function' ? getBoundFn(ctxBase, k, v) : v;
   },
-  set(t, k, v) { t[k] = (k === 'fillStyle' || k === 'strokeStyle') && tintRgb ? tintColor(v) : v; return true; },
+  set(_t, k, v) { ctxBase[k] = (k === 'fillStyle' || k === 'strokeStyle') && tintRgb ? tintColor(v) : v; return true; },
 });
+const HIT_SZ = 320, HIT_HALF = HIT_SZ / 2;
+const hitCanvas = document.createElement('canvas');
+hitCanvas.width = HIT_SZ * 2;
+hitCanvas.height = HIT_SZ * 2;
+const hitCtx = hitCanvas.getContext('2d');
 const TINT_RGB = ETIERS.map(T => T.tint && [1, 3, 5].map(i => parseInt(T.tint.slice(i, i + 2), 16)));
 function drawEnemyTinted(e) {
   tintRgb = TINT_RGB[e.tier]; tintAmt = ETIERS[e.tier].alpha * 1.35;
   ctx = ctxTinted;
-  try { drawEnemyBody(e); } finally { ctx = ctxReal; tintRgb = null; }
+  try { drawEnemyBody(e); } finally { ctx = ctxBase; tintRgb = null; }
 }
 function drawEnemyBody(e) {
   const wob = Math.sin(e.t * 10) * 1.5;
@@ -2810,7 +2992,7 @@ function drawEnemyBody(e) {
   const stunShake = e.stunT > 0 ? Math.sin(performance.now() / 25) * 3 : 0;
   ctx.save(); ctx.translate(e.x + stunShake, e.y + (fly ? Math.sin(e.t * (e.type === 'bat' ? 9 : 5)) * 4 - 8 : wob * 0.4)); ctx.scale(e.face, 1);
   ctx.lineWidth = 2.5; ctx.strokeStyle = OUT; ctx.lineJoin = 'round'; ctx.lineCap = 'round';
-  const fl = e.flash > 0;
+  const fl = false;
   const r = e.r;
   if (e.type === 'mouse') {
     const c = fl ? '#fff' : '#b9a58f';
@@ -2962,7 +3144,34 @@ function drawEnemy(e) {
     ctx.fillStyle = `rgba(230,60,40,${0.12 + 0.2 * (1 - e.mt / 0.7)})`; ctx.fillRect(0, -r * 0.8, 380, r * 1.6);
     ctx.restore();
   }
-  if (e.tier > 0 && T.tint) drawEnemyTinted(e); else drawEnemyBody(e);
+  if (e.flash > 0) {
+    const flashAmt = clamp(e.flash / 0.12, 0, 1);
+    hitCtx.setTransform(2, 0, 0, 2, 0, 0);
+    hitCtx.clearRect(0, 0, HIT_SZ, HIT_SZ);
+    hitCtx.save();
+    hitCtx.translate(HIT_HALF - e.x, HIT_HALF - e.y);
+    ctxBase = hitCtx;
+    ctx = hitCtx;
+    try {
+      if (e.tier > 0 && T.tint) drawEnemyTinted(e); else drawEnemyBody(e);
+    } finally {
+      ctxBase = ctxReal;
+      ctx = ctxReal;
+      hitCtx.restore();
+    }
+    ctx.drawImage(hitCanvas, e.x - HIT_HALF, e.y - HIT_HALF, HIT_SZ, HIT_SZ);
+    hitCtx.save();
+    hitCtx.globalCompositeOperation = 'source-in';
+    hitCtx.fillStyle = '#ffffff';
+    hitCtx.fillRect(0, 0, HIT_SZ, HIT_SZ);
+    hitCtx.restore();
+    const prevA = ctx.globalAlpha;
+    ctx.globalAlpha = prevA * flashAmt * 0.88;
+    ctx.drawImage(hitCanvas, e.x - HIT_HALF, e.y - HIT_HALF, HIT_SZ, HIT_SZ);
+    ctx.globalAlpha = prevA;
+  } else {
+    if (e.tier > 0 && T.tint) drawEnemyTinted(e); else drawEnemyBody(e);
+  }
   if (L.buffT.freeze > 0) {
     ctx.lineWidth = 2;
     ell(e.x, e.y - (e.type === 'boss' ? 8 : 0) - (e.z || 0), r * 1.25, r * 1.25, 'rgba(160,230,255,.45)', 'rgba(255,255,255,.9)');
@@ -2977,12 +3186,38 @@ function drawEnemy(e) {
   const big = e.type === 'boss' || e.type === 'elite';
   let top = e.y - r - 14;
   if (e.hp < e.maxHp || big || e.tier > 0) {
-    const bw = e.type === 'boss' ? 96 : e.type === 'elite' ? 56 : Math.max(r * 2, 26);
-    const by = e.y - (e.z || 0) - (e.type === 'boss' ? (e.kind.barY || r + 34) : r + (e.type === 'elite' ? 26 : 14));
+    const bw = e.type === 'boss' ? 104 : e.type === 'elite' ? 60 : Math.max(r * 2.1, 30);
+    const bh = e.type === 'boss' ? 8 : e.type === 'elite' ? 6.5 : 5.5;
+    const hitPop = e.flash > 0 ? -Math.sin(clamp(e.flash / 0.12, 0, 1) * Math.PI) * 2.5 : 0;
+    const by = e.y - (e.z || 0) - (e.type === 'boss' ? (e.kind.barY || r + 34) : r + (e.type === 'elite' ? 26 : 15)) + hitPop;
+    const bx = e.x - bw / 2;
+    const hpPct = clamp(e.hp / e.maxHp, 0, 1);
+    const trailPct = clamp((e.hpTrail !== undefined ? e.hpTrail : e.hp) / e.maxHp, hpPct, 1);
     top = by;
-    if (e.type === 'boss') outlined(e.kind.name, e.x, by - 12, 14, e.hp < e.maxHp / 2 ? '#ff9a8a' : '#fff');
-    ctx.fillStyle = OUT; ctx.fillRect(e.x - bw / 2 - 1, by - 1, bw + 2, 6);
-    ctx.fillStyle = big ? '#c8402d' : T.bar; ctx.fillRect(e.x - bw / 2, by, bw * clamp(e.hp / e.maxHp, 0, 1), 4);
+    if (e.type === 'boss') outlined(e.kind.name, e.x, by - 13, 14, hpPct < 0.5 ? '#ff9a8a' : '#fff');
+
+    ctx.save();
+    ctx.fillStyle = OUT;
+    ctx.beginPath(); ctx.roundRect(bx - 1.5, by - 1.5, bw + 3, bh + 3, 4); ctx.fill();
+    ctx.fillStyle = '#2d1e12';
+    ctx.beginPath(); ctx.roundRect(bx, by, bw, bh, 3); ctx.fill();
+
+    if (trailPct > hpPct) {
+      ctx.fillStyle = '#ffe9a8';
+      ctx.beginPath(); ctx.roundRect(bx, by, Math.max(3, bw * trailPct), bh, 3); ctx.fill();
+    }
+    if (hpPct > 0) {
+      ctx.fillStyle = big ? '#e04836' : hpPct > 0.6 ? '#6fe06f' : hpPct > 0.28 ? '#ffb347' : '#ff5252';
+      ctx.beginPath(); ctx.roundRect(bx, by, Math.max(3, bw * hpPct), bh, 3); ctx.fill();
+      ctx.fillStyle = 'rgba(255,255,255,0.35)';
+      ctx.beginPath(); ctx.roundRect(bx + 1, by + 0.8, Math.max(2, bw * hpPct - 2), Math.max(1.2, bh * 0.3), 1.5); ctx.fill();
+    }
+    if (e.flash > 0) {
+      ctx.globalAlpha = clamp(e.flash / 0.12, 0, 1) * 0.55;
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath(); ctx.roundRect(bx, by, bw, bh, 3); ctx.fill();
+    }
+    ctx.restore();
   }
   for (let i = 0; i < e.tier; i++) drawStar(e.x + (i - (e.tier - 1) / 2) * 12, top - 9, 5.5, T.bar, OUT, 1.5);
   if (e.hunter && !big) {

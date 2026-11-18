@@ -6,10 +6,19 @@ const SFX = (() => {
   let mutedFn = () => false;
   let masterVolume = 0.8;
   const lastPlayed = {};
+  const voiceIdleWaiters = [];
 
   const effectiveMuted = () => Boolean(mutedFn()) || masterVolume <= 0;
 
+  function flushVoiceWaiters() {
+    while (voiceIdleWaiters.length) {
+      const fn = voiceIdleWaiters.shift();
+      try { fn(); } catch (e) { /* ignore */ }
+    }
+  }
+
   function stopVoice() {
+    voiceIdleWaiters.length = 0;
     if (voiceSource) {
       try { voiceSource.onended = null; voiceSource.stop(); voiceSource.disconnect(); } catch (e) { /* ignore */ }
       voiceSource = null;
@@ -206,14 +215,19 @@ const SFX = (() => {
     if (effectiveMuted()) return false;
     const audioBuf = await ac.decodeAudioData(arrayBuffer.slice(0));
     if (effectiveMuted()) return false;
-    if (voiceSource) {
+    if (voiceSource || (window.speechSynthesis && window.speechSynthesis.speaking)) {
       if (!interrupt) return false;
       stopVoice();
     }
     const src = ac.createBufferSource();
     src.buffer = audioBuf;
     src.connect(voiceGain);
-    src.onended = () => { if (voiceSource === src) voiceSource = null; };
+    src.onended = () => {
+      if (voiceSource === src) {
+        voiceSource = null;
+        flushVoiceWaiters();
+      }
+    };
     voiceSource = src;
     src.start(0);
     return true;
@@ -225,6 +239,11 @@ const SFX = (() => {
     playCombo,
     playVoiceBuffer,
     stopVoice,
+    isVoicePlaying: () => Boolean(voiceSource),
+    onVoiceIdle(fn) {
+      if (!voiceSource) { fn(); return; }
+      if (voiceIdleWaiters.length < 6) voiceIdleWaiters.push(fn);
+    },
     syncGain,
     isMuted: effectiveMuted,
     setMuted(fn) {

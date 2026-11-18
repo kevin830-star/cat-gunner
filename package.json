@@ -6,8 +6,9 @@
   "scripts": {
     "dev": "node server.js",
     "start": "node server.js",
-    "build": "node --check server.js && node --check data.js && node --check icons.js && node --check sound.js && node --check bosses.js && node --check game.js",
-    "lint": "node --check server.js && node --check data.js && node --check icons.js && node --check sound.js && node --check bosses.js && node --check game.js"
+    "pregen-tts": "node scripts/pregen-tts.mjs",
+    "build": "node --check server.js && node --check voice-phrases.js && node --check data.js && node --check icons.js && node --check sound.js && node --check bosses.js && node --check game.js",
+    "lint": "node --check server.js && node --check voice-phrases.js && node --check data.js && node --check icons.js && node --check sound.js && node --check bosses.js && node --check game.js"
   },
   "dependencies": {
     "@google/genai": "^3.4.0",

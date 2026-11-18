@@ -95,6 +95,7 @@ button.plain { margin-top: 14px; background: none; border: none; text-decoration
   padding-top: 6px; border-top: 1.5px dashed #d9b98a; font-size: 12px; font-weight: 700;
 }
 .voice-tag { color: #6b4a2e; text-align: left; flex: 1; min-width: 0; word-break: break-word; }
+.voice-actions { display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto; flex-wrap: wrap; justify-content: flex-end; }
 .voice-test-btn { padding: 3px 10px; font-size: 12px; font-weight: 700; background: #fff; flex: 0 0 auto; }
 .voice-test-btn:hover { background: #ffe9a8; }
 
