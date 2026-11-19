@@ -1956,12 +1956,10 @@ function update(rawDt) {
   // 敌人潮
   while (L.hordeTimes.length && L.elapsed >= L.hordeTimes[0]) { L.hordeTimes.shift(); hordeBurst(); }
 
-  // 小头目
+  // 小头目（静默登场，不再弹出或播报提示）
   while (L.eliteTimes.length && L.elapsed >= L.eliteTimes[0]) {
     L.eliteTimes.shift();
     spawnEnemy('elite');
-    L.notice = { text: '小头目来了！', t: 2.2 };
-    sfx.boss();
   }
 
   // 敌人更新
