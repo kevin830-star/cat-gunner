@@ -71,6 +71,7 @@ function toggleMasterMute(showToast = false) {
   if (!store.mute && store.volume <= 0) store.volume = 0.8;
   save();
   applyMasterAudio(true);
+  if (isAudioMuted()) releaseQuestionVoiceLocks();
   refreshToggles();
   if (showToast && L) toast(isAudioMuted() ? '🔇 声音已静音' : `🔊 声音已开启 (${Math.round(store.volume * 100)}%)`);
 }
@@ -80,6 +81,7 @@ function setMasterVolume(val) {
   store.mute = store.volume <= 0;
   save();
   applyMasterAudio(false);
+  if (isAudioMuted()) releaseQuestionVoiceLocks();
   refreshToggles();
 }
 
@@ -104,27 +106,55 @@ if (window.speechSynthesis) {
   try { window.speechSynthesis.onvoiceschanged = () => { zhBrowserVoice = pickBrowserVoice(); }; } catch (e) { /* ignore */ }
 }
 
-function speakBrowser(clean, { interrupt = true, seq = speakSeq } = {}) {
-  if (isAudioMuted() || !clean || !window.speechSynthesis) return false;
+let activeUtterance = null;
+function speakBrowser(clean, { interrupt = true, seq = speakSeq, onDone = null } = {}) {
+  const finish = (() => {
+    let called = false;
+    return () => {
+      if (called) return;
+      called = true;
+      if (typeof onDone === 'function') onDone();
+    };
+  })();
+  if (isAudioMuted() || !clean || !window.speechSynthesis) {
+    finish();
+    return false;
+  }
   const run = () => {
-    if (isAudioMuted() || (interrupt && seq !== speakSeq)) return;
+    if (isAudioMuted() || (interrupt && seq !== speakSeq)) { finish(); return; }
     if (interrupt) SFX.stopVoice();
     try {
       const u = new SpeechSynthesisUtterance(clean);
+      activeUtterance = u;
       u.lang = 'zh-CN';
       const voice = zhBrowserVoice || pickBrowserVoice();
       if (voice) { zhBrowserVoice = voice; u.voice = voice; }
       u.volume = clamp(store.volume, 0, 1);
       u.rate = 1.05;
       u.pitch = 1.08;
+      // 防止部分浏览器遗漏 onend 导致按钮永久锁定，设置与文本长度匹配的兜底超时
+      const fallbackMs = clamp(clean.length * 420 + 1800, 2600, 12000);
+      const timer = setTimeout(() => {
+        if (activeUtterance === u) activeUtterance = null;
+        finish();
+      }, fallbackMs);
+      const done = () => {
+        clearTimeout(timer);
+        if (activeUtterance === u) activeUtterance = null;
+        finish();
+      };
+      u.onend = done;
+      u.onerror = done;
       window.speechSynthesis.speak(u);
-    } catch (e) { /* ignore */ }
+    } catch (e) {
+      finish();
+    }
   };
   if (interrupt) {
     run();
   } else if (SFX.isVoicePlaying()) {
     SFX.onVoiceIdle(() => {
-      if (seq === speakSeq) run();
+      if (seq === speakSeq) run(); else finish();
     });
   } else {
     run();
@@ -199,14 +229,29 @@ async function speak(text, interrupt = true) {
       const buf = await fetchStaticVoiceWav(clean);
       if (seq !== speakSeq || isAudioMuted()) return;
       if (buf) {
-        const played = await SFX.playVoiceBuffer(buf, { interrupt });
-        if (!played && !interrupt && seq === speakSeq && !isAudioMuted()) {
+        let onEndedResolve = null;
+        const doneP = new Promise(r => { onEndedResolve = r; });
+        const played = await SFX.playVoiceBuffer(buf, { interrupt, onEnded: onEndedResolve });
+        if (played) {
+          // 兜底计时，防止音频上下文挂起导致一直等待
+          await Promise.race([doneP, new Promise(r => setTimeout(r, 15000))]);
+          return;
+        }
+        if (!interrupt && seq === speakSeq && !isAudioMuted()) {
           if (SFX.isVoicePlaying()) {
-            SFX.onVoiceIdle(() => {
-              if (seq === speakSeq && !isAudioMuted()) SFX.playVoiceBuffer(buf, { interrupt: false });
+            await new Promise(resolve => {
+              SFX.onVoiceIdle(async () => {
+                if (seq === speakSeq && !isAudioMuted()) {
+                  let r2 = null;
+                  const p2 = new Promise(r => { r2 = r; });
+                  const ok2 = await SFX.playVoiceBuffer(buf, { interrupt: false, onEnded: r2 });
+                  if (ok2) await Promise.race([p2, new Promise(r => setTimeout(r, 15000))]);
+                }
+                resolve();
+              });
             });
           } else if (window.speechSynthesis && window.speechSynthesis.speaking) {
-            speakBrowser(clean, { interrupt: false, seq });
+            await new Promise(resolve => speakBrowser(clean, { interrupt: false, seq, onDone: resolve }));
           }
         }
         return;
@@ -217,7 +262,38 @@ async function speak(text, interrupt = true) {
   }
 
   if (seq === speakSeq && !isAudioMuted()) {
-    speakBrowser(clean, { interrupt, seq });
+    await new Promise(resolve => speakBrowser(clean, { interrupt, seq, onDone: resolve }));
+  }
+}
+
+function unlockQuizNextBtn(selector, label) {
+  const b = document.querySelector(selector);
+  if (!b) return;
+  b.disabled = false;
+  b.textContent = label;
+}
+function lockNextUntilVoice(target, text, selector, label, guard) {
+  if (!target.waitingVoice) return;
+  const tok = (target.voiceTok = (target.voiceTok || 0) + 1);
+  speak(text, true).then(() => {
+    if (guard() && target.voiceTok === tok && target.waitingVoice) {
+      target.waitingVoice = false;
+      unlockQuizNextBtn(selector, label);
+    }
+  });
+}
+function releaseQuestionVoiceLocks() {
+  if (quiz && quiz.waitingVoice) {
+    quiz.waitingVoice = false;
+    unlockQuizNextBtn('[data-action="quizDone"]', quiz.correct ? '🔥 觉醒并继续战斗' : '继续战斗');
+  }
+  if (exam && exam.waitingVoice) {
+    exam.waitingVoice = false;
+    unlockQuizNextBtn('[data-action="examNext"]', exam.i + 1 < exam.total ? '下一题' : '查看考试结果');
+  }
+  if (mini && mini.waitingVoice) {
+    mini.waitingVoice = false;
+    unlockQuizNextBtn('[data-action="miniNext"]', mini.i + 1 < mini.total ? '下一题' : '看结果');
   }
 }
 function announce(text, priority = false) {
@@ -2252,21 +2328,24 @@ function renderQuiz(chosen) {
       <div class="res ${ok ? 'ok' : 'no'}">${ok ? '答对了！攻击力 +25% · 准备金光觉醒！' : '答错了，正确答案是「' + ans + '」'}</div>
       <div class="full">${q.s.replace('____', ans)}<button class="speak" data-action="speak" data-t="${cleanSent}">🔊</button></div>
       <div>${q.py}</div>${zhq ? '' : `<div>${q.en}</div>`}
-      <button class="big" data-action="quizDone">${ok ? '🔥 觉醒并继续战斗' : '继续战斗'}</button>`;
+      <button class="big" data-action="quizDone" ${quiz.waitingVoice ? 'disabled' : ''}>${quiz.waitingVoice ? '🔊 朗读中...' : (ok ? '🔥 觉醒并继续战斗' : '继续战斗')}</button>`;
   }
   $('quizBody').innerHTML = h;
 }
 function answerQuiz(i) {
   if (!quiz || quiz.answered || i < 0 || i >= quiz.opts.length) return;
-  quiz.answered = true;
-  const ok = quiz.opts[i].ok;
-  quiz.correct = ok;
+  const cur = quiz;
+  cur.answered = true;
+  const ok = cur.opts[i].ok;
+  cur.correct = ok;
   if (ok) { L.atkBuff += 0.25; sfx.right(); } else sfx.wrong();
+  const cleanSent = cur.q.s.replace('____', cur.q.opts[0].split('|')[0]).replace(/（.*?）/g, '');
+  cur.waitingVoice = Boolean(!isAudioMuted() && formatSpeechText(cleanSent));
   renderQuiz(i);
-  const cleanSent = quiz.q.s.replace('____', quiz.q.opts[0].split('|')[0]).replace(/（.*?）/g, '');
-  speak(cleanSent);
+  lockNextUntilVoice(cur, cleanSent, '[data-action="quizDone"]', cur.correct ? '🔥 觉醒并继续战斗' : '继续战斗', () => quiz === cur);
 }
 function finishQuiz() {
+  if (!quiz || quiz.waitingVoice) return;
   const won = quiz && quiz.correct;
   show(null);
   setState('playing');
@@ -2422,7 +2501,7 @@ function renderExam() {
     h += `<div class="qfb">
       <div class="res ${ok ? 'ok' : 'no'}">${ok ? '✓ 答对了！' : `✗ 答错了，正确答案是「${q.ansText}」`}</div>
       <div class="full">${q.info}<button class="speak" data-action="speak" data-t="${q.say}">🔊</button></div>
-      <button class="big" data-action="examNext">${ex.i + 1 < ex.total ? '下一题' : '查看考试结果'}</button>
+      <button class="big" data-action="examNext" ${ex.waitingVoice ? 'disabled' : ''}>${ex.waitingVoice ? '🔊 朗读中...' : (ex.i + 1 < ex.total ? '下一题' : '查看考试结果')}</button>
     </div>`;
   } else {
     h += `<button class="plain" data-action="examGiveUp">放弃考试，直接结算</button>`;
@@ -2439,16 +2518,19 @@ function answerExam(i) {
   const ok = q.opts[i].ok;
   ex.results[ex.i] = ok;
   if (ok) { ex.right++; sfx.right(); } else sfx.wrong();
+  const qIdx = ex.i;
+  ex.waitingVoice = Boolean(!isAudioMuted() && formatSpeechText(q.say));
   renderExam();
-  speak(q.say);
+  lockNextUntilVoice(ex, q.say, '[data-action="examNext"]', ex.i + 1 < ex.total ? '下一题' : '查看考试结果', () => exam === ex && ex.i === qIdx);
 }
 
 function nextExam() {
   const ex = exam;
-  if (!ex || ex.finished) return;
+  if (!ex || ex.finished || ex.waitingVoice) return;
   if (ex.i + 1 < ex.total) {
     ex.i++;
     ex.chosen = -1;
+    ex.waitingVoice = false;
     renderExam();
   } else {
     ex.finished = true;
@@ -2595,7 +2677,7 @@ function renderMini() {
     const ok = q.opts[m.chosen].ok;
     h += `<div class="qfb"><div class="res ${ok ? 'ok' : 'no'}">${ok ? '答对了！' : '答错了'}</div>
       <div class="full">${q.info}<button class="speak" data-action="speak" data-t="${q.say}">🔊</button></div></div>
-      <button class="big" data-action="miniNext">${m.i + 1 < m.total ? '下一题' : '看结果'}</button>`;
+      <button class="big" data-action="miniNext" ${m.waitingVoice ? 'disabled' : ''}>${m.waitingVoice ? '🔊 朗读中...' : (m.i + 1 < m.total ? '下一题' : '看结果')}</button>`;
   }
   $('miniBody').innerHTML = h;
 }
@@ -2604,13 +2686,15 @@ function answerMini(i) {
   if (!m || m.chosen >= 0 || i < 0 || i >= m.q.opts.length) return;
   m.chosen = i;
   if (m.q.opts[i].ok) { m.right++; sfx.right(); } else sfx.wrong();
+  const qIdx = m.i;
+  m.waitingVoice = Boolean(!isAudioMuted() && formatSpeechText(m.q.say));
   renderMini();
-  speak(m.q.say);
+  lockNextUntilVoice(m, m.q.say, '[data-action="miniNext"]', m.i + 1 < m.total ? '下一题' : '看结果', () => mini === m && m.i === qIdx);
 }
 function nextMini() {
   const m = mini;
-  if (!m) return;
-  if (m.i + 1 < m.total) { m.i++; m.chosen = -1; m.type = miniTypeDef(m.types[m.i]); m.q = makeMiniQuestion(m.types[m.i]); return renderMini(); }
+  if (!m || m.waitingVoice) return;
+  if (m.i + 1 < m.total) { m.i++; m.chosen = -1; m.waitingVoice = false; m.type = miniTypeDef(m.types[m.i]); m.q = makeMiniQuestion(m.types[m.i]); return renderMini(); }
   const perfect = m.right === m.total;
   const reward = m.right * miniReward() + (perfect ? MINI_PERFECT : 0);
   G.fish += reward;
@@ -2874,7 +2958,22 @@ document.addEventListener('click', e => {
     case 'examNext': nextExam(); break;
     case 'examRevive': reviveFromExam(); break;
     case 'examFail': case 'examGiveUp': gameOver(exam ? exam.reason : '闯关失败'); break;
-    case 'speak': speak(b.dataset.t, true); break;
+    case 'speak': {
+      const t = b.dataset.t;
+      if (state === 'quiz' && quiz && quiz.waitingVoice) {
+        const cur = quiz;
+        lockNextUntilVoice(cur, t, '[data-action="quizDone"]', cur.correct ? '🔥 觉醒并继续战斗' : '继续战斗', () => quiz === cur);
+      } else if (state === 'exam' && exam && exam.waitingVoice) {
+        const ex = exam, qIdx = ex.i;
+        lockNextUntilVoice(ex, t, '[data-action="examNext"]', ex.i + 1 < ex.total ? '下一题' : '查看考试结果', () => exam === ex && ex.i === qIdx);
+      } else if (state === 'mini' && mini && mini.waitingVoice) {
+        const m = mini, qIdx = m.i;
+        lockNextUntilVoice(m, t, '[data-action="miniNext"]', m.i + 1 < m.total ? '下一题' : '看结果', () => mini === m && m.i === qIdx);
+      } else {
+        speak(t, true);
+      }
+      break;
+    }
     case 'mini': openMini(); break;
     case 'miniAns': answerMini(+b.dataset.i); break;
     case 'miniNext': nextMini(); break;

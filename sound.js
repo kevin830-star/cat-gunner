@@ -2,7 +2,7 @@
 'use strict';
 
 const SFX = (() => {
-  let ac = null, master = null, voiceGain = null, voiceSource = null, noiseBuf = null;
+  let ac = null, master = null, voiceGain = null, voiceSource = null, voiceOnEnded = null, noiseBuf = null;
   let mutedFn = () => false;
   let masterVolume = 0.8;
   const lastPlayed = {};
@@ -17,12 +17,21 @@ const SFX = (() => {
     }
   }
 
+  function fireVoiceEnded() {
+    const cb = voiceOnEnded;
+    voiceOnEnded = null;
+    if (cb) {
+      try { cb(); } catch (e) { /* ignore */ }
+    }
+  }
+
   function stopVoice() {
     voiceIdleWaiters.length = 0;
     if (voiceSource) {
       try { voiceSource.onended = null; voiceSource.stop(); voiceSource.disconnect(); } catch (e) { /* ignore */ }
       voiceSource = null;
     }
+    fireVoiceEnded();
     if (window.speechSynthesis) {
       try { speechSynthesis.cancel(); } catch (e) { /* ignore */ }
     }
@@ -212,7 +221,7 @@ const SFX = (() => {
     s[1]();
   }
 
-  async function playVoiceBuffer(arrayBuffer, { interrupt = true } = {}) {
+  async function playVoiceBuffer(arrayBuffer, { interrupt = true, onEnded = null } = {}) {
     if (effectiveMuted()) return false;
     init();
     if (!ac || !voiceGain) return false;
@@ -229,9 +238,11 @@ const SFX = (() => {
     const src = ac.createBufferSource();
     src.buffer = audioBuf;
     src.connect(voiceGain);
+    voiceOnEnded = typeof onEnded === 'function' ? onEnded : null;
     src.onended = () => {
       if (voiceSource === src) {
         voiceSource = null;
+        fireVoiceEnded();
         flushVoiceWaiters();
       }
     };

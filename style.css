@@ -63,7 +63,11 @@ button.big {
   margin-top: 16px; font-size: 22px; font-weight: 700; padding: 12px 34px; cursor: pointer;
   background: #ffb347; border: 3px solid #4a3423; border-radius: 16px; box-shadow: 0 4px 0 #4a3423;
 }
-button.big:active { transform: translateY(3px); box-shadow: 0 1px 0 #4a3423; }
+button.big:active:not(:disabled) { transform: translateY(3px); box-shadow: 0 1px 0 #4a3423; }
+button.big:disabled {
+  background: #e6ddcc; color: #7a6652; border-color: #8c7660;
+  box-shadow: 0 2px 0 rgba(74, 52, 35, .35); opacity: .78; cursor: not-allowed;
+}
 button.plain { margin-top: 14px; background: none; border: none; text-decoration: underline; font-size: 15px; cursor: pointer; }
 .toggles { margin-top: 14px; display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
 .tgl { background: #fff; border: 2px solid #4a3423; border-radius: 999px; padding: 6px 14px; font-size: 14px; cursor: pointer; }
