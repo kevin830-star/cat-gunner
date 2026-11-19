@@ -21,6 +21,7 @@ const WORLD = { w: 1700, h: 1300 };
 const NEST = { x: WORLD.w / 2, y: WORLD.h / 2, r: 46 };
 const FENCE_R = 150;
 const BOSS_EVERY = 3;
+const MINI_MAX_PER_LEVEL = 3;   // 每关最多 3 次汉字小游戏（过关自动 1 次 + 商店自发 2 次）
 const LEVEL_TIME = 60;
 const GRID_SIZE = 100; // 地面方格每格 100 像素
 const SHOCKWAVE_PUSH = GRID_SIZE * 5; // 冲击波震退五格 = 500 像素
@@ -219,12 +220,17 @@ async function speak(text, interrupt = true) {
     speakBrowser(clean, { interrupt, seq });
   }
 }
-function announce(text) {
+function announce(text, priority = false) {
   if (isAudioMuted() || !text) return;
   const clean = formatSpeechText(text);
   if (!clean) return;
   const now = performance.now();
-  if (clean === lastAnnounce.text && now - lastAnnounce.at < 1500) return;
+  if (!priority) {
+    if (now - lastAnnounce.at < 3500) return;
+    if (SFX.isVoicePlaying() || (window.speechSynthesis && window.speechSynthesis.speaking)) return;
+  } else if (clean === lastAnnounce.text && now - lastAnnounce.at < 1500) {
+    return;
+  }
   lastAnnounce.text = clean;
   lastAnnounce.at = now;
   speak(clean, false);
@@ -475,7 +481,7 @@ const freshRun = () => {
     itemOrder: 2,      // 道具解锁顺序的版本（2 = 猫薄荷、炮塔、冲击波……）
     pendingUnlock: null,
     stats: { catHp: 0, catSpd: 0, nestHp: 0 },
-    nestHp: 300, miniPlayed: false, lastBonus: 0, seen: {}, stars: {}, lastStars: 0, lastStarBonus: 0, lastCatLoss: 0, lastNestLoss: 0,
+    nestHp: 300, miniPlayed: false, miniCount: 0, lastBonus: 0, seen: {}, stars: {}, lastStars: 0, lastStarBonus: 0, lastCatLoss: 0, lastNestLoss: 0,
     levelsSinceExam: 0,
   };
 };
@@ -489,9 +495,11 @@ function loadRun() {
     const d = JSON.parse(localStorage.getItem(SAVE_KEY));
     if (!d || !(d.level >= 1)) return null;
     const run = freshRun();
-    for (const k of ['level', 'fish', 'kills', 'score', 'maxCombo', 'nestHp', 'lastBonus', 'lastStars', 'lastStarBonus', 'lastCatLoss', 'lastNestLoss', 'levelsSinceExam']) if (Number.isFinite(d[k])) run[k] = d[k];
+    for (const k of ['level', 'fish', 'kills', 'score', 'maxCombo', 'nestHp', 'lastBonus', 'lastStars', 'lastStarBonus', 'lastCatLoss', 'lastNestLoss', 'levelsSinceExam', 'miniCount']) if (Number.isFinite(d[k])) run[k] = d[k];
     if (!Number.isFinite(d.levelsSinceExam)) run.levelsSinceExam = (run.level - 1) % 6;
-    run.miniPlayed = !!d.miniPlayed;
+    if (!Number.isFinite(d.miniCount)) run.miniCount = d.miniPlayed ? 1 : 0;
+    run.miniCount = clamp(Math.floor(run.miniCount), 0, MINI_MAX_PER_LEVEL);
+    run.miniPlayed = run.miniCount >= MINI_MAX_PER_LEVEL;
     // 旧版的解锁数量不包含开局就有的猫薄荷，所以要多算 1 个
     if (Number.isFinite(d.unlockedItems)) run.unlockedItems = clamp(Math.floor(d.unlockedItems) + (d.itemOrder === 2 ? 0 : 1), 1, ITEMS.length);
     else run.unlockedItems = clamp(1 + Math.floor(run.level / BOSS_EVERY), 1, ITEMS.length);
@@ -585,7 +593,6 @@ function startLevel() {
     comboBarVis: 0, comboBreakT: 0, comboBreak: null, comboFilter: 0,
   };
   camZoom = 1;
-  announce(`第 ${G.level} 关，${L.isBoss ? '头目关，头目会在最后出现' : '保卫猫窝'}`);
   // 开局满血视觉反馈
   ring(L.cat.x, L.cat.y, 65, '#7ed957', 0.55);
   addText(L.cat.x, L.cat.y - 34, `猫咪生命已回满 (${fullCatHp})`, '#9cff6b', 15, 1.4);
@@ -647,7 +654,6 @@ function useCatnip() {
   if (!owned('catnip') || L.catnipT > 0 || L.catnipCd > 0) return;
   L.catnipT = 5 + 2 * st.lv; L.catnipCd = itemDef('catnip').cool(st.lv);   // 冷却在效果结束后才开始倒数
   addText(L.cat.x, L.cat.y - 34, '猫薄荷！', '#9cff6b', 18);
-  announce('猫薄荷');
   sfx.catnip();
 }
 
@@ -667,7 +673,6 @@ function useShockwave() {
   burst(c.x, c.y, '#4fc3ff', 28, 340);
   burst(c.x, c.y, '#ffe066', 18, 260);
   addText(c.x, c.y - 44, '💥 冲击波！全屏震退五格！', '#4fc3ff', 21, 1.5);
-  announce('冲击波');
   // 震碎场上所有敌方子弹
   L.ebullets = [];
   const stunDur = 1.2 + 0.4 * (st.lv - 1);
@@ -709,7 +714,6 @@ function fireMissiles() {
   ring(NEST.x, NEST.y, 140, '#ff9a3c', 0.5, true); burst(NEST.x, NEST.y - 20, '#ffd84a', 20, 220);
   L.shake = Math.max(L.shake, 0.3); sfx.missile();
   addText(NEST.x, NEST.y - 80, '🚀 导弹防御！', '#ffb347', 20, 1.5);
-  announce('导弹防御');
 }
 
 // 答对头目中文题后触发：慢镜头特写，全身变大变红，周身金光上升，维持 5 秒钟
@@ -726,7 +730,6 @@ function triggerRedRage() {
   burst(c.x, c.y, '#ffb347', 18, 200);
   addText(c.x, c.y - 52, '✨ 答对觉醒！金光巨化 5 秒！', '#ffe066', 20, 2.2);
   sfx.redPowerup();
-  announce('答对了，金光觉醒');
 }
 
 // ---------- 效果 ----------
@@ -1448,10 +1451,15 @@ function damageEnemy(e, dmg) {
     const d = ENEMIES[e.type];
     burst(e.x, e.y, '#fff', e.type === 'boss' ? 30 : 8, e.type === 'boss' ? 260 : 130);
     const T = ETIERS[e.tier || 0];
-    let n = Math.round(randInt(d.fish[0], d.fish[1]) * T.fish);
+    // 关卡内敌人掉落的小鱼干减半，鼓励通过中文练习赚取更多小鱼干
+    let n = Math.max(1, Math.round(randInt(d.fish[0], d.fish[1]) * T.fish * 0.5));
     if (e.small) n = Math.max(1, Math.round(n * 0.3));
     if (e.type === 'boss') {
-      for (let i = 0; i < 10; i++) L.fish.push({ x: e.x + rand(-40, 40), y: e.y + rand(-40, 40), v: Math.ceil(n / 10) });
+      const cnt = Math.min(10, n);
+      for (let i = 0; i < cnt; i++) {
+        const v = Math.floor(n / cnt) + (i < n % cnt ? 1 : 0);
+        if (v > 0) L.fish.push({ x: e.x + rand(-40, 40), y: e.y + rand(-40, 40), v });
+      }
       dropBuff(e.x - 30, e.y); dropBuff(e.x + 30, e.y);
       if (e.kind.id === 'dragon') dropBuff(e.x, e.y - 30);
       L.boss = null; L.shake = 0.5; sfx.boom();
@@ -1464,7 +1472,11 @@ function damageEnemy(e, dmg) {
         sfx.unlock();
       }
     } else if (e.type === 'elite') {
-      for (let i = 0; i < 4; i++) L.fish.push({ x: e.x + rand(-25, 25), y: e.y + rand(-25, 25), v: Math.ceil(n / 4) });
+      const cnt = Math.min(4, n);
+      for (let i = 0; i < cnt; i++) {
+        const v = Math.floor(n / cnt) + (i < n % cnt ? 1 : 0);
+        if (v > 0) L.fish.push({ x: e.x + rand(-25, 25), y: e.y + rand(-25, 25), v });
+      }
       dropBuff(e.x, e.y);
       L.shake = 0.3; sfx.boom();
     } else {
@@ -1505,7 +1517,6 @@ function applyBuff(b) {
   addText(c.x, c.y - 24, b.tip + '!', '#fff', 14, 1.6);
   burst(c.x, c.y, b.color, 22, 240);
   sfx.transform();
-  announce(`${b.name}，${b.tip}`);
 }
 
 function hurtCat(dmg) {
@@ -1725,7 +1736,7 @@ function startBossIntro(boss) {
   };
   L.shake = Math.max(L.shake, 0.22);
   sfx.bossIntro();
-  announce(`BOSS来袭！${bName}`);
+  announce(`BOSS来袭！${bName}`, true);
 }
 
 function updateBossIntro(rawDt) {
@@ -1815,7 +1826,9 @@ function update(rawDt) {
 
   L.elapsed += dt;
   L.time = Math.max(0, L.time - dt);
-  L.banner -= rawDt; L.shake = Math.max(0, L.shake - rawDt); L.nestFlash = Math.max(0, L.nestFlash - rawDt);
+  L.banner -= rawDt;
+  L.shake = L.combo >= 2 ? 0 : Math.max(0, L.shake - rawDt);
+  L.nestFlash = Math.max(0, L.nestFlash - rawDt);
   if (L.comboT > 0) {
     L.comboT = Math.max(0, L.comboT - dt);
     const targetPct = L.comboT / COMBO_WINDOW;
@@ -1852,8 +1865,6 @@ function update(rawDt) {
   else if (L.catnipCd > 0) L.catnipCd = Math.max(0, L.catnipCd - rawDt);
   if (L.shockwaveCd > 0) L.shockwaveCd = Math.max(0, L.shockwaveCd - rawDt);
   for (const k in L.buffT) if (L.buffT[k] > 0) L.buffT[k] -= rawDt;
-  if (L.notice && L.notice !== L.saidNotice) { L.saidNotice = L.notice; announce(L.notice.text); }
-  if (L.toast && L.toast !== L.saidToast) { L.saidToast = L.toast; announce(L.toast.text); }
   if (L.notice) { L.notice.t -= rawDt; if (L.notice.t <= 0) L.notice = null; }
   if (L.toast) { L.toast.t -= rawDt; if (L.toast.t <= 0) L.toast = null; }
 
@@ -2089,16 +2100,17 @@ function rateLevel() {
   return { cr, nr, stars: score <= 0.15 ? 3 : score <= 0.4 ? 2 : 1 };
 }
 
-// 过关：先结算并存档，再播放庆祝动画（含星级），最后进商店
+// 过关：先结算并存档，再播放庆祝动画（含星级），最后进商店（不自动吸走地上未捡的小鱼干）
 function levelClear() {
-  for (const f of L.fish) { G.fish += f.v; f.v = 0; f.fly = true; }
   const r = rateLevel();
-  G.lastBonus = 10 + 5 * G.level;
-  G.lastStarBonus = r.stars === 3 ? 15 + 4 * G.level : r.stars === 2 ? 6 + 2 * G.level : 0;
+  // 关卡自带过关与星级小鱼干奖励减半
+  G.lastBonus = Math.round((10 + 5 * G.level) * 0.5);
+  G.lastStarBonus = r.stars === 3 ? Math.round((15 + 4 * G.level) * 0.5) : r.stars === 2 ? Math.round((6 + 2 * G.level) * 0.5) : 0;
   G.fish += G.lastBonus + G.lastStarBonus;
   G.lastStars = r.stars; G.lastCatLoss = r.cr; G.lastNestLoss = r.nr;
   G.stars[G.level] = Math.max(G.stars[G.level] || 0, r.stars);
   G.levelsSinceExam = L.reviveUsed ? 0 : (G.levelsSinceExam || 0) + 1;
+  G.miniCount = 0;
   G.miniPlayed = false;
   saveRun();
   let saveCfg = false;
@@ -2144,12 +2156,6 @@ function updateClear(dt) {
     if (e.x < -60 || e.x > WORLD.w + 60 || e.y < -60 || e.y > WORLD.h + 60) e.dead = true;
   }
   L.enemies = L.enemies.filter(e => !e.dead);
-  for (const f of L.fish) {
-    const d = dist(f, c), s = 800 * dt / (d || 1);
-    f.x += (c.x - f.x) * Math.min(1, s); f.y += (c.y - f.y) * Math.min(1, s);
-    if (d < c.r + 8) { f.dead = true; sfx.pickup(); }
-  }
-  L.fish = L.fish.filter(f => !f.dead);
   const vw = W / scale, vh = H / scale, party = G.lastStars === 3 ? 2 : 1;
   for (let i = 0; i < 2 * party; i++) L.parts.push({ x: cam.x + rand(0, vw), y: cam.y - 10, vx: rand(-40, 40), vy: rand(140, 300), life: rand(1.2, 2.2), color: PARTY[randInt(0, 5)], r: rand(3, 5.5) });
   L.fireworkT -= dt;
@@ -2183,8 +2189,8 @@ function openShop() {
     saveRun();
     showUnlock(uid);
   }
-  // 每关结束后自动弹出汉字小游戏（解锁动画会盖在上面，点掉后就能答题）
-  if (!G.miniPlayed) openMini();
+  // 每关结束后自动弹出第 1 次汉字小游戏；完成后还可在商店自发多做 2 次（每关共 3 次）
+  if ((G.miniCount || 0) === 0) openMini();
 }
 function gameOver(reason) {
   camZoom = 1;
@@ -2361,7 +2367,7 @@ function openReviveExam(reason) {
     started: false,   // 先显示提示，玩家点「开始」后才开始答题
   };
   sfx.boss();
-  announce(`${reason.replace(/……/g, '')}，进行中文测验，答对八题即可复活`);
+  announce('进行中文测验，答对八题即可复活', true);
   setState('exam');
   renderExam();
   show('exam');
@@ -2494,7 +2500,7 @@ function reviveFromExam() {
   ring(L.cat.x, L.cat.y, 180, '#7ed957', 0.6, true);
   burst(L.cat.x, L.cat.y, '#ffe066', 26, 260);
   addText(L.cat.x, L.cat.y - 44, '🎉 考试通过！满血复活 · 攻击 +35% · 导弹 +1', '#9cff6b', 19, 2.2);
-  announce('考试通过，猫咪和猫窝满血复活，攻击力大幅提升，导弹防御加一次');
+  announce('考试通过，满血复活', true);
   sfx.transform();
   show(null);
   setState('playing');
@@ -2565,8 +2571,10 @@ function makeMiniQuestion(type) {
     opts: shuffle(toneVariants(w.py).map(v => ({ t: v, ok: v === w.py }))), info: `${w.e} ${w.c} ${w.py} ${w.en}`, say: w.c };
 }
 function openMini() {
-  if (G.miniPlayed) return;
-  G.miniPlayed = true;
+  const used = G.miniCount || 0;
+  if (used >= MINI_MAX_PER_LEVEL) return;
+  G.miniCount = used + 1;
+  G.miniPlayed = G.miniCount >= MINI_MAX_PER_LEVEL;
   saveRun();
   const types = miniRound();
   mini = { types, type: miniTypeDef(types[0]), i: 0, right: 0, total: types.length, q: makeMiniQuestion(types[0]), chosen: -1 };
@@ -2577,7 +2585,7 @@ function openMini() {
 function renderMini() {
   const m = mini, q = m.q, answered = m.chosen >= 0;
   if (!answered && q.speakQ && m.saidI !== m.i) { m.saidI = m.i; speak(q.speakQ); }
-  let h = `<div class="qtitle">汉字小游戏 · ${m.type.name} (${m.i + 1}/${m.total}) </div>
+  let h = `<div class="qtitle">汉字小游戏（第 ${G.miniCount || 1}/${MINI_MAX_PER_LEVEL} 次）· ${m.type.name} (${m.i + 1}/${m.total}) </div>
     <div class="qhint">${m.type.tip} 每答对一题 +${miniReward()} 🐟</div>${q.prompt}<div class="opts">`;
   q.opts.forEach((o, i) => {
     let cls = 'opt';
@@ -2603,15 +2611,19 @@ function answerMini(i) {
 }
 function nextMini() {
   const m = mini;
+  if (!m) return;
   if (m.i + 1 < m.total) { m.i++; m.chosen = -1; m.type = miniTypeDef(m.types[m.i]); m.q = makeMiniQuestion(m.types[m.i]); return renderMini(); }
   const perfect = m.right === m.total;
   const reward = m.right * miniReward() + (perfect ? MINI_PERFECT : 0);
   G.fish += reward;
+  mini = null;
   saveRun();
   if (reward) sfx.buy();
+  const left = Math.max(0, MINI_MAX_PER_LEVEL - (G.miniCount || 0));
   $('miniBody').innerHTML = `<h2>${perfect ? '全部答对！太棒了！' : '小游戏结束'}</h2>
-    <div class="stat">答对 <b>${m.right}</b> / ${m.total} 题${perfect ? `<br>全对奖励 +${MINI_PERFECT} 🐟` : ''}<br>一共获得 <b>${reward}</b> 🐟 小鱼干</div>
-    <button class="big" data-action="miniDone">回到商店</button>`;
+    <div class="stat">答对 <b>${m.right}</b> / ${m.total} 题${perfect ? `<br>全对奖励 +${MINI_PERFECT} 🐟` : ''}<br>一共获得 <b>${reward}</b> 🐟 小鱼干<br><small>本关已完成 ${G.miniCount}/${MINI_MAX_PER_LEVEL} 次中文练习${left > 0 ? `，还可再来 ${left} 次` : ''}</small></div>
+    ${left > 0 ? `<div><button class="big" data-action="mini">再来一轮（剩余 ${left} 次）</button></div>` : ''}
+    <div><button class="${left > 0 ? 'plain' : 'big'}" data-action="miniDone">回到商店</button></div>`;
 }
 
 // ---------- 商店 ----------
@@ -2626,10 +2638,13 @@ function renderShop() {
   const fish = G.fish;
   const starRow = n => [0, 1, 2].map(i => `<span class="${i < n ? '' : 'off'}">★</span>`).join('');
   const totalStars = Object.values(G.stars).reduce((a, b) => a + b, 0);
+  const miniUsed = G.miniCount || 0;
+  const miniLeft = Math.max(0, MINI_MAX_PER_LEVEL - miniUsed);
+  const miniBtnLabel = miniLeft > 0 ? (miniUsed > 0 ? `再来一次（余 ${miniLeft} 次）` : `开始（可做 ${MINI_MAX_PER_LEVEL} 次）`) : `本关已完成 (${MINI_MAX_PER_LEVEL}/${MINI_MAX_PER_LEVEL})`;
   let h = `<div class="shophead"><h2>第 ${G.level} 关完成！<span class="stars">${starRow(G.lastStars)}</span></h2>
     <div class="fishbar">🐟 ${fish}</div></div>
     <div style="font-size:13px;margin:2px 0 8px">过关奖励 +${G.lastBonus}${G.lastStarBonus ? `, 星级奖励 +${G.lastStarBonus}` : ''} 🐟 · 累计 ★ ${totalStars} · 下一关开始猫咪生命自动回满 (${catMaxHp()} HP)</div>
-    <div class="minicard"><div class="txt"><b>汉字小游戏 · 综合练习</b><br>${MINI_TOTAL} 道题，识字、偏旁、词语、成语、读音、古诗各一题，每答对一题 +${miniReward()} 🐟，全对再 +${MINI_PERFECT} 🐟。</div>${btn('mini', '', G.miniPlayed ? '已玩过' : '开始', !G.miniPlayed)}</div>`;
+    <div class="minicard"><div class="txt"><b>汉字小游戏 · 综合练习（本关 ${miniUsed}/${MINI_MAX_PER_LEVEL} 次）</b><br>${MINI_TOTAL} 道题，识字、偏旁、词语、成语、读音、古诗各一题，每答对一题 +${miniReward()} 🐟，全对再 +${MINI_PERFECT} 🐟。${miniLeft > 0 ? `还可自发练习 <b>${miniLeft}</b> 次赚取更多小鱼干！` : '本关 3 次练习已全部完成！'}</div>${btn('mini', '', miniBtnLabel, miniLeft > 0)}</div>`;
 
   // 分页：生命 / 武器 / 道具
   const tabs = [['life', '❤️ 生命'], ['weapon', '🔫 武器'], ['item', '🎒 道具']];
@@ -2745,7 +2760,7 @@ function showUnlock(id) {
     </div>`;
   el.classList.add('show');
   sfx.unlock();
-  announce(`解锁新道具：${it.name}`);
+  announce(`解锁新道具：${it.name}`, true);
   clearTimeout(unlockTimer);
   unlockTimer = setTimeout(hideUnlock, 4200);
 }
@@ -2756,7 +2771,6 @@ function showItemMerge(id, from, to) {
     <div class="sub" style="font-size:24px;font-weight:900">Lv${from} → Lv${to}</div><div class="sub">${it.name}：${it.eff(to)}</div></div>`;
   el.classList.add('show');
   if (to >= 4) sfx.mergeBig(); else sfx.merge();
-  announce(`${it.name}升到 ${to} 级`);
   clearTimeout(mergeTimer); mergeTimer = setTimeout(hideMerge, 2200);
 }
 function hideUnlock() { $('unlockFx').classList.remove('show'); }
@@ -4032,13 +4046,12 @@ function drawComboPenalty(narrow) {
   // 短暂淡入（0~0.18）-> 停留 -> 平滑淡出（0.45~1.0）
   const alpha = p < 0.18 ? p / 0.18 : p > 0.45 ? clamp(1 - (p - 0.45) / 0.55, 0, 1) : 1;
   const dropY = p * 14;
-  const jx = p < 0.25 ? Math.sin(p * 85) * 4 * (1 - p / 0.25) : 0;
 
   ctx.save();
   // 四周暗红冷却边缘闪光，制造连击中断的紧迫惩罚感
   ctx.globalAlpha = alpha;
   ctx.drawImage(getVignette('break'), 0, 0, W, H);
-  const cx = W / 2 + jx, cy = H * 0.29 + dropY;
+  const cx = W / 2, cy = H * 0.29 + dropY;
   outlined('连击重置！', cx, cy, narrow ? 24 : 30, '#ff8b85', 'center');
   outlined(`${b.combo} 连击 · ×${b.mult.toFixed(1)} 积分已清空`, cx, cy + (narrow ? 24 : 28), narrow ? 13 : 15, '#ffd7d2', 'center');
   ctx.restore();
@@ -4342,7 +4355,7 @@ function render() {
   cam.x = vw >= WORLD.w ? (WORLD.w - vw) / 2 : clamp(focus.x - vw / 2, 0, WORLD.w - vw);
   cam.y = vh >= WORLD.h ? (WORLD.h - vh) / 2 : clamp(focus.y - vh / 2, 0, WORLD.h - vh);
   let shx = 0, shy = 0;
-  if (L && state === 'playing' && L.shake > 0) {
+  if (L && state === 'playing' && L.shake > 0 && !(L.combo >= 2)) {
     shx = rand(-4, 4); shy = rand(-4, 4);
   }
   ctx.save();
