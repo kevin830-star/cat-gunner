@@ -392,11 +392,13 @@ const owned = id => G.items[id].n > 0;
 const itemPow = id => 1 + 0.35 * (G.items[id].lv - 1);  // 升级带来的伤害倍数
 const tierBadge = (t, cls = '') => `<span class="tier t${t} ${cls}" style="--tc:${TIERS[t].color}">${TIERS[t].id}</span>`;
 
+// 武器全局伤害倍率（降低 50% 武器伤害，提升关卡与头目战压力）
+const WEAPON_DMG_MULT = 0.5;
 // 某把武器在某个品级下的实际数值
 function weaponStats(id, tier) {
   const w = weaponDef(id), T = TIERS[tier];
   const s = {
-    dmg: w.dmg * T.dmg, interval: w.interval * T.spd, speed: w.speed, jitter: w.jitter, pierce: w.pierce, life: w.life, color: w.color,
+    dmg: w.dmg * T.dmg * WEAPON_DMG_MULT, interval: w.interval * T.spd, speed: w.speed, jitter: w.jitter, pierce: w.pierce, life: w.life, color: w.color,
     count: w.count + (id === 'shotgun' ? tier : 0), spread: w.spread + (id === 'shotgun' ? tier * 0.05 : 0),
     explode: w.explode ? w.explode + 14 * tier : 0, splash: 0, r: w.r + (id === 'laser' ? tier * 1.6 : 0),
   };
@@ -474,6 +476,7 @@ const freshRun = () => {
     pendingUnlock: null,
     stats: { catHp: 0, catSpd: 0, nestHp: 0 },
     nestHp: 300, miniPlayed: false, lastBonus: 0, seen: {}, stars: {}, lastStars: 0, lastStarBonus: 0, lastCatLoss: 0, lastNestLoss: 0,
+    levelsSinceExam: 0,
   };
 };
 
@@ -486,7 +489,8 @@ function loadRun() {
     const d = JSON.parse(localStorage.getItem(SAVE_KEY));
     if (!d || !(d.level >= 1)) return null;
     const run = freshRun();
-    for (const k of ['level', 'fish', 'kills', 'score', 'maxCombo', 'nestHp', 'lastBonus', 'lastStars', 'lastStarBonus', 'lastCatLoss', 'lastNestLoss']) if (Number.isFinite(d[k])) run[k] = d[k];
+    for (const k of ['level', 'fish', 'kills', 'score', 'maxCombo', 'nestHp', 'lastBonus', 'lastStars', 'lastStarBonus', 'lastCatLoss', 'lastNestLoss', 'levelsSinceExam']) if (Number.isFinite(d[k])) run[k] = d[k];
+    if (!Number.isFinite(d.levelsSinceExam)) run.levelsSinceExam = (run.level - 1) % 6;
     run.miniPlayed = !!d.miniPlayed;
     // 旧版的解锁数量不包含开局就有的猫薄荷，所以要多算 1 个
     if (Number.isFinite(d.unlockedItems)) run.unlockedItems = clamp(Math.floor(d.unlockedItems) + (d.itemOrder === 2 ? 0 : 1), 1, ITEMS.length);
@@ -553,20 +557,30 @@ function hordeSchedule(lv) {
   return lv >= 16 ? [14, 30, 46] : lv >= 12 ? [20, 40] : [28];
 }
 
+// 每 6 关触发一次「绝境试炼」（若已连续 5 关未触发复活测验，或来到 6 的倍数关且至少 3 关未测验）
+const isTrialWallLevel = () => !!(G && ((G.levelsSinceExam || 0) >= 5 || (G.level >= 6 && G.level % 6 === 0 && (G.levelsSinceExam || 0) >= 3)));
+const trialActive = () => !!(L && L.trialWall && !L.reviveUsed);
+
 function startLevel() {
   const fullCatHp = catMaxHp();
+  const trialWall = isTrialWallLevel();
+  const baseElites = eliteSchedule(G.level);
+  const baseHordes = hordeSchedule(G.level);
+  const eliteTimes = trialWall ? [...new Set([...baseElites, 18, 36, 50])].sort((a, b) => a - b) : baseElites;
+  const hordeTimes = trialWall ? [...new Set([...baseHordes, 16, 34, 48])].sort((a, b) => a - b) : baseHordes;
   L = {
-    time: LEVEL_TIME, elapsed: 0, spawnT: 1.2,
+    time: LEVEL_TIME, elapsed: 0, spawnT: trialWall ? 0.65 : 1.2,
     // 每个关卡开始，猫的生命值回满
     cat: { x: NEST.x, y: NEST.y + 95, r: 17, hp: fullCatHp, cd: 0, inv: 0, aim: 0, walk: 0, moving: false, kx: 0, ky: 0, s: 1 },
     enemies: [], bullets: [], ebullets: [], fish: [], parts: [], texts: [], turrets: [],
     atkBuff: 0, catnipT: 0, catnipCd: 0, shockwaveCd: 0, missileLeft: missileBase(), redRageT: 0, reviveUsed: false,
+    trialWall, trialRaidT: 4.2, trialRaidN: 0,
     catLost: 0, nestLost: 0, catMax: fullCatHp, nestMax: nestMaxHp(), on: {}, starsSnd: 3,
     boss: null, bossSpawned: false, bossHalfAsked: false, bossIntro: null, isBoss: isBossLevel(G.level),
     shake: 0, banner: 2.2, nestFlash: 0,
     drops: [], buffT: Object.fromEntries(BUFFS.filter(b => b.dur).map(b => [b.id, 0])),
     rings: [], bolts: [], helpers: [], trail: [], shAngle: 0, stormCd: 2, morphT: 0, stompT: 0, trailT: 0, form: null,
-    eliteTimes: eliteSchedule(G.level), hordeTimes: hordeSchedule(G.level), notice: null, clearT: 0, fireworkT: 0,
+    eliteTimes, hordeTimes, notice: null, clearT: 0, fireworkT: 0,
     combo: 0, comboT: 0, comboPop: 0, comboTierMin: 1, lastComboPts: 0, levelScore: 0, levelMaxCombo: 0, comboSplash: null,
     comboBarVis: 0, comboBreakT: 0, comboBreak: null, comboFilter: 0,
   };
@@ -664,10 +678,12 @@ function useShockwave() {
     let dx = e.x - c.x, dy = e.y - c.y, d = Math.hypot(dx, dy);
     if (d < 1) { dx = e.x - NEST.x; dy = e.y - NEST.y; d = Math.hypot(dx, dy) || 1; }
     const a = Math.atan2(dy, dx);
-    // 后退五格（5 * 100 = 500 像素），通过平滑高速击退位移实现
-    e.shockDist = SHOCKWAVE_PUSH;
+    // 后退五格（5 * 100 = 500 像素），头目与小头目具备一定霸体抗击退/抗眩晕
+    const pushMul = e.type === 'boss' ? 0.4 : e.type === 'elite' ? 0.6 : 1;
+    const stunMul = e.type === 'boss' ? 0.55 : e.type === 'elite' ? 0.75 : 1;
+    e.shockDist = SHOCKWAVE_PUSH * pushMul;
     e.shockAngle = a;
-    e.stunT = Math.max(e.stunT || 0, stunDur);
+    e.stunT = Math.max(e.stunT || 0, stunDur * stunMul);
     e.flash = 0.35;
     if (e.mode === 'wind' || e.mode === 'charge') { e.mode = 'rest'; e.mt = 1.0; }
     if (e.type === 'boss' && (e.st === 'wind' || e.st === 'act')) bossState(e, 'rest', 0.8);
@@ -725,40 +741,56 @@ function burst(x, y, color, n = 6, speed = 120) {
 }
 
 // ---------- 敌人 ----------
-// 20 关以内保持平滑成长；20 关以后大幅提升血量、攻击、移速、高阶怪概率与刷怪密度
+// 1-5 关平滑上手；6-19 关明显提升血量、速度与高阶怪比例；20 关以后大幅跃升
 const hpScale = lv => {
-  const base = Math.min(1 + 0.055 * (lv - 1), 1.6 + 0.015 * Math.max(0, lv - 12));
+  if (lv <= 5) return 1 + 0.07 * (lv - 1);
+  const mid = Math.min(lv, 20) - 5;
+  const base = 1.28 + 0.24 * mid + 0.018 * mid * mid;
   if (lv <= 20) return base;
   const over20 = lv - 20;
-  return base * (1.85 + 0.55 * over20 + 0.04 * over20 * over20);
+  return base * (1.55 + 0.42 * over20 + 0.032 * over20 * over20);
 };
 const dmgScale = lv => {
-  const base = (1 + 0.08 * (lv - 1)) * (1 + 0.025 * Math.max(0, lv - 8));
+  const midMul = lv >= 6 ? 1 + 0.04 * (Math.min(lv, 20) - 5) : 1;
+  const base = (1 + 0.08 * (lv - 1)) * (1 + 0.025 * Math.max(0, lv - 8)) * midMul;
   if (lv <= 20) return base;
   const over20 = lv - 20;
   return base * (1 + 0.16 * over20 + 0.008 * over20 * over20);
 };
 const speedScale = lv => {
-  if (lv <= 20) return Math.min(1.7, 1 + 0.03 * (lv - 1));
-  return Math.min(2.25, 1.57 + 0.045 * (lv - 20));
+  if (lv <= 20) return Math.min(1.85, 1 + 0.03 * (lv - 1) + 0.012 * Math.max(0, lv - 5));
+  return Math.min(2.35, 1.85 + 0.045 * (lv - 20));
 };
-const enemyCapFor = lv => lv > 20 ? Math.min(165, 115 + (lv - 20) * 5) : 110;
-const enemyCountMulFor = lv => lv > 20 ? Math.min(1.18, ENEMY_COUNT_MUL + (lv - 20) * 0.045) : ENEMY_COUNT_MUL;
+const enemyCapFor = lv => lv > 20 ? Math.min(165, 115 + (lv - 20) * 5) : lv >= 6 ? Math.min(125, 110 + (lv - 5)) : 110;
+const enemyCountMulFor = lv => {
+  const midMul = lv >= 6 ? Math.min(0.97, ENEMY_COUNT_MUL + (Math.min(lv, 20) - 5) * 0.018) : ENEMY_COUNT_MUL;
+  if (lv <= 20) return midMul;
+  return Math.min(1.22, midMul + (lv - 20) * 0.045);
+};
+const eliteHpScale = lv => 4.2 + 0.16 * Math.max(0, lv - 5);
 const bossHpScale = lv => {
-  const base = 1 + 0.22 * (lv / BOSS_EVERY - 1);
+  const base = (1 + 0.22 * (lv / BOSS_EVERY - 1)) * (1 + 0.14 * Math.max(0, Math.min(lv, 20) - 5));
   if (lv <= 20) return base;
   const over20 = lv - 20;
-  return base * (2.5 + 0.85 * over20 + 0.065 * over20 * over20);
+  return base * (1.9 + 0.65 * over20 + 0.05 * over20 * over20);
 };
 const bossSizeScale = lv => lv <= 20 ? 1 : Math.min(1.85, 1.32 + 0.045 * (lv - 20));
-const bossSpeedScale = lv => lv <= 20 ? 1 : Math.min(1.45, 1 + 0.035 * (lv - 20));
-const bossCdScale = lv => lv <= 20 ? 1 : Math.max(0.62, 1 - 0.03 * (lv - 20));
+const bossSpeedScale = lv => lv <= 20
+  ? Math.min(2.65, 1.75 + 0.052 * (lv - 1))
+  : Math.min(3.25, 2.74 + 0.055 * (lv - 20));
+const bossCdScale = lv => {
+  const base = lv <= 20
+    ? Math.max(0.8, 1 - 0.012 * Math.max(0, lv - 5))
+    : Math.max(0.6, 0.8 - 0.025 * (lv - 20));
+  return trialActive() ? base * 0.68 : base;
+};
 const bossLabel = (kind, lv) => lv >= 30 ? `深渊·${kind.name}` : lv > 20 ? `巨型·${kind.name}` : kind.name;
 function rollTier(lv) {
+  const mid6 = Math.max(0, Math.min(lv, 20) - 5);
   const over20 = Math.max(0, lv - 20);
-  const p1 = clamp((lv - 4) * 0.035, 0, over20 > 0 ? 0.24 : 0.3);
-  const p2 = clamp((lv - 9) * 0.025 + over20 * 0.02, 0, over20 > 0 ? 0.36 : 0.22);
-  const p3 = clamp((lv - 14) * 0.018 + over20 * 0.028, 0, over20 > 0 ? 0.44 : 0.15);
+  const p1 = clamp((lv - 4) * 0.038 + mid6 * 0.008, 0, over20 > 0 ? 0.24 : 0.34);
+  const p2 = clamp((lv - 8) * 0.028 + mid6 * 0.008 + over20 * 0.02, 0, over20 > 0 ? 0.38 : 0.28);
+  const p3 = clamp((lv - 12) * 0.022 + over20 * 0.028, 0, over20 > 0 ? 0.45 : 0.2);
   const r = Math.random();
   const t = r < p3 ? 3 : r < p3 + p2 ? 2 : r < p3 + p2 + p1 ? 1 : 0;
   return L && L.boss ? Math.min(t, lv > 20 ? 2 : 1) : t;
@@ -779,20 +811,38 @@ function spawnEnemy(type, pos, tierArg) {
   let hp = d.hp * hpScale(lv) * T.hp;
   const kind = type === 'boss' ? bossFor(lv) : null;
   if (kind) hp = d.hp * kind.hp * bossHpScale(lv) * BOSS_HP_MULT;
-  const specialDmgMul = (1 + 0.08 * (lv - 1)) * (lv > 20 ? 1 + 0.18 * (lv - 20) : 1);
+  else if (type === 'elite') hp = d.hp * hpScale(lv) * eliteHpScale(lv);
+  const specialDmgMul = (1 + 0.08 * (lv - 1)) * (lv >= 6 ? 1 + 0.04 * (Math.min(lv, 20) - 5) : 1) * (lv > 20 ? 1 + 0.18 * (lv - 20) : 1);
   const e = {
     type, tier, x, y, r: d.r * T.size, hp, maxHp: hp, spd: d.spd * speedScale(lv) * T.spd * rand(0.92, 1.08),
     dmg: d.dmg * (special ? specialDmgMul : dmgScale(lv)) * T.dmg, cd: rand(0.3, 1), cd2: 0, flash: 0, face: 1, t: rand(0, 10), seed: rand(0, 6.28), summon: 4, dead: false,
     stunT: 0, shockDist: 0, shockAngle: 0,
     hunter: d.target === 'cat' || (d.target === 'nest' && !special && Math.random() < huntChance(lv, tier)),
   };
+  if (type === 'elite') {
+    e.r = Math.round(d.r * (1.15 + Math.min(0.35, Math.max(0, lv - 5) * 0.02)));
+    e.spd = d.spd * (1.28 + Math.min(0.55, Math.max(0, lv - 5) * 0.03));
+    e.dmg *= 1.45;
+  }
   if (kind) {
     const sizeMul = bossSizeScale(lv);
+    const baseSpd = kind.spd * bossSpeedScale(lv);
+    const baseDmg = e.dmg;
     Object.assign(e, {
-      kind, sizeMul, r: Math.round(kind.r * sizeMul), spd: kind.spd * bossSpeedScale(lv),
-      st: 'walk', stT: 0, stDur: 1, spCd: lv > 20 ? 2.2 : 3, atkAnim: 0, z: 0, dir: 0, walking: true,
+      kind, sizeMul, r: Math.round(kind.r * sizeMul), spd: baseSpd, baseSpd, baseDmg,
+      st: 'walk', stT: 0, stDur: 1, spCd: lv > 20 ? 2.2 : lv >= 6 ? 2.6 : 3, atkAnim: 0, z: 0, dir: 0, walking: true,
       meteors: [], sub: '', atk: 0, tick: 0, volley: 0, waveIdx: 0,
     });
+    if (trialActive()) {
+      // 每 6 关「绝境试炼」复活前：头目进入高压狂暴压境，复活后自动恢复常规数值
+      e.hp *= 1.55; e.maxHp = e.hp;
+      e.spd *= 1.35; e.dmg *= 1.6; e.spCd *= 0.68;
+      e.trialBoost = true;
+    }
+  } else if (trialActive()) {
+    e.hp *= 1.35; e.maxHp = e.hp;
+    e.spd *= 1.28; e.dmg *= 1.65;
+    if (!special && !e.hunter && Math.random() < 0.28) e.hunter = true;
   }
   L.enemies.push(e);
   if (!special) announceEnemy(type, tier);
@@ -870,12 +920,12 @@ function updateBoss(e, dt, c) {
   if (sp === 'dragon') return updateDragon(e, dt, c);
   if (sp === 'phoenix') return updatePhoenix(e, dt, c);
   if (e.st === 'walk') {
-    let spd = e.spd * (e.rage > 0 ? 1.3 : 1);
-    if (ilv('fence') && dist(e, NEST) < FENCE_R) spd *= 1 - fenceSlow();
+    let spd = e.spd * (e.rage > 0 ? 1.3 : 1) * (e.hp < e.maxHp / 2 ? 1.28 : 1);
+    if (ilv('fence') && dist(e, NEST) < FENCE_R) spd *= 1 - fenceSlow() * 0.4;
     const dx = NEST.x - e.x, dy = NEST.y - e.y, dd = Math.hypot(dx, dy) || 1, stop = NEST.r + e.r - 6;
     e.walking = dd > stop;
     if (e.walking) { e.x += dx / dd * spd * dt; e.y += dy / dd * spd * dt; if (Math.abs(dx) > 2) e.face = dx < 0 ? -1 : 1; }
-    else if (e.cd <= 0) { e.cd = 1.3; e.atkAnim = 0.4; hurtNest(e.dmg); }
+    else if (e.cd <= 0) { e.cd = 1.05; e.atkAnim = 0.4; hurtNest(e.dmg); }
     if (e.cd2 <= 0 && dCat < c.r + e.r - 6) { e.cd2 = 0.8; e.atkAnim = 0.4; hurtCat(e.dmg); }
     e.spCd -= dt;
     const inRange = (sp === 'stomp' || sp === 'quake')
@@ -1461,8 +1511,9 @@ function applyBuff(b) {
 function hurtCat(dmg) {
   const c = L.cat;
   if (c.inv > 0 || L.buffT.shield > 0 || L.buffT.giant > 0 || L.redRageT > 0) return;
-  dmg = Math.min(dmg, catMaxHp() * 0.25);
-  c.hp -= dmg; L.catLost += dmg; c.inv = 0.45; L.shake = Math.max(L.shake, 0.2);
+  const capPct = trialActive() ? 0.4 : 0.25;
+  dmg = Math.min(dmg, catMaxHp() * capPct);
+  c.hp -= dmg; L.catLost += dmg; c.inv = trialActive() ? 0.26 : 0.45; L.shake = Math.max(L.shake, 0.2);
   addText(c.x, c.y - 30, '-' + Math.round(dmg), '#ff6b5e', 16);
   sfx.hurt();
 }
@@ -1848,12 +1899,33 @@ function update(rawDt) {
     L.spawnT -= dt;
     if (L.spawnT <= 0) {
       const over20 = Math.max(0, G.level - 20);
-      const per = over20 > 0 ? 1 + Math.floor((over20 + 2) / 3) : 1 + Math.floor(Math.max(0, G.level - 19) / 8);
+      const trial = trialActive();
+      const per = over20 > 0
+        ? 1 + Math.floor((over20 + 2) / 3)
+        : trial ? 2 : (G.level >= 12 ? (Math.random() < 0.35 ? 2 : 1) : 1);
       for (let i = 0; i < per; i++) spawnWave();
       const base = over20 > 0
         ? Math.max(0.26, 0.44 * Math.pow(0.95, over20))
-        : Math.max(0.45, 1.7 * Math.pow(0.92, G.level - 1));
-      L.spawnT = base * (1 - 0.3 * L.elapsed / LEVEL_TIME) * rand(0.8, 1.2) * (L.boss ? (over20 > 0 ? 1.35 : 1.8) : 1) / enemyCountMulFor(G.level);
+        : Math.max(0.42, 1.55 * Math.pow(0.905, G.level - 1));
+      L.spawnT = base * (1 - 0.3 * L.elapsed / LEVEL_TIME) * rand(0.8, 1.2) * (L.boss ? (over20 > 0 ? 1.35 : 1.6) : 1) * (trial ? 0.68 : 1) / enemyCountMulFor(G.level);
+    }
+  }
+  // 每 6 关「绝境试炼」：头目出场后若尚未经历复活考试，持续从四面发起强敌夹击与增援
+  if (L.boss && trialActive()) {
+    L.trialRaidT -= dt;
+    if (L.trialRaidT <= 0) {
+      L.trialRaidT = 4.4;
+      L.trialRaidN++;
+      const lv = G.level;
+      const types = lv >= 12 ? ['boar', 'bomber', 'snake', 'crow'] : lv >= 7 ? ['boar', 'crow', 'raccoon', 'roach'] : ['crow', 'raccoon', 'roach', 'mouse'];
+      for (let side = 0; side < 4; side++) {
+        const p = edgePos(side, side < 2 ? rand(180, WORLD.w - 180) : rand(150, WORLD.h - 150));
+        const e1 = spawnEnemy(types[(side + L.trialRaidN) % types.length], p, Math.min(2, Math.floor(lv / 6)));
+        e1.hunter = side % 2 === 0;
+        spawnEnemy(types[(side + 1) % types.length], { x: p.x + rand(-35, 35), y: p.y + rand(-35, 35) }, Math.min(2, Math.floor(lv / 8)));
+      }
+      if (L.trialRaidN % 2 === 0) spawnEnemy('elite');
+      sfx.horde();
     }
   }
   // 头目在关卡的最后出现（倒计时剩余 3 秒内登场，先播放入场聚光灯与横幅过场，再进入答题）
@@ -1911,7 +1983,7 @@ function update(rawDt) {
       spd *= 2.6;
       if (Math.random() < 0.4) L.parts.push({ x: e.x, y: e.y + e.r * 0.7, vx: rand(-30, 30), vy: rand(-30, 0), life: 0.35, color: '#e3cf9a', r: rand(3, 5) });
     }
-    if (ilv('fence') && dist(e, NEST) < FENCE_R) spd *= 1 - fenceSlow();
+    if (ilv('fence') && dist(e, NEST) < FENCE_R) spd *= 1 - fenceSlow() * (e.type === 'elite' ? 0.5 : 1);
     const dx = tgt.x - e.x, dy = tgt.y - e.y, dd = Math.hypot(dx, dy) || 1;
     const stop = d.ranged ? 230 : (tgt === NEST ? NEST.r + e.r - 4 : c.r + e.r - 8);
     if (d.flyer) {
@@ -2026,6 +2098,7 @@ function levelClear() {
   G.fish += G.lastBonus + G.lastStarBonus;
   G.lastStars = r.stars; G.lastCatLoss = r.cr; G.lastNestLoss = r.nr;
   G.stars[G.level] = Math.max(G.stars[G.level] || 0, r.stars);
+  G.levelsSinceExam = L.reviveUsed ? 0 : (G.levelsSinceExam || 0) + 1;
   G.miniPlayed = false;
   saveRun();
   let saveCfg = false;
@@ -2384,11 +2457,20 @@ const NEST_WIPE_R = 380;
 function reviveFromExam() {
   if (!L) return;
   L.reviveUsed = true;
+  L.trialWall = false;
+  G.levelsSinceExam = 0;
+  L.atkBuff += 0.35;        // 通过 10 题复活测验获得反击攻击加成
   L.cat.hp = catMaxHp();
   L.cat.inv = 3.5;
   G.nestHp = nestMaxHp();   // 猫和猫窝都满血
   L.ebullets = [];
   L.missileLeft++;          // 导弹防御多一次
+  // 若头目处于「绝境试炼」高压增幅状态，复活后恢复正常速度与伤害，让玩家能够反杀通关
+  if (L.boss && L.boss.trialBoost) {
+    L.boss.spd = L.boss.baseSpd;
+    L.boss.dmg = L.boss.baseDmg;
+    L.boss.trialBoost = false;
+  }
   // 猫窝附近的敌人全部消灭（头目只受重创），猫身边的敌人被震退
   let wiped = 0;
   for (const e of L.enemies) {
@@ -2411,8 +2493,8 @@ function reviveFromExam() {
   }
   ring(L.cat.x, L.cat.y, 180, '#7ed957', 0.6, true);
   burst(L.cat.x, L.cat.y, '#ffe066', 26, 260);
-  addText(L.cat.x, L.cat.y - 44, '🎉 考试通过！满血复活！导弹 +1', '#9cff6b', 20, 2.0);
-  announce('考试通过，猫咪和猫窝满血复活，导弹防御加一次');
+  addText(L.cat.x, L.cat.y - 44, '🎉 考试通过！满血复活 · 攻击 +35% · 导弹 +1', '#9cff6b', 19, 2.2);
+  announce('考试通过，猫咪和猫窝满血复活，攻击力大幅提升，导弹防御加一次');
   sfx.transform();
   show(null);
   setState('playing');
@@ -4021,11 +4103,14 @@ function drawHUD() {
 
   if (L.banner > 0 && state !== 'clear') {
     ctx.globalAlpha = clamp(L.banner, 0, 1);
-    outlined(`第 ${G.level} 关`, W / 2, H * 0.3, 46, G.level > 20 ? '#ff8b6b' : '#ffe066');
-    const sub = L.isBoss
-      ? (G.level > 20 ? '高难头目关！巨型头目将在关卡最后登场' : '头目关！头目将在关卡最后登场')
-      : (G.level > 20 ? '高难挑战！强敌汹涌来袭，全力保卫猫窝！' : '保卫猫窝！');
-    outlined(sub, W / 2, H * 0.3 + 44, 20, G.level > 20 ? '#ffd7a8' : '#fff');
+    const hot = L.trialWall || G.level > 20;
+    outlined(`第 ${G.level} 关`, W / 2, H * 0.3, 46, hot ? '#ff8b6b' : '#ffe066');
+    const sub = L.trialWall
+      ? (G.level > 20 ? '🔥 绝境试炼！超强巨型头目与狂潮四面围攻！' : '🔥 绝境试炼！强敌四面围攻，全力迎战！')
+      : L.isBoss
+        ? (G.level > 20 ? '高难头目关！巨型头目将在关卡最后登场' : '头目关！头目将在关卡最后登场')
+        : (G.level > 20 ? '高难挑战！强敌汹涌来袭，全力保卫猫窝！' : '保卫猫窝！');
+    outlined(sub, W / 2, H * 0.3 + 44, 20, hot ? '#ffd7a8' : '#fff');
     ctx.globalAlpha = 1;
   }
   const effScale = scale * camZoom;
