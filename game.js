@@ -535,16 +535,21 @@ function continueGame() {
   show('shop');
 }
 
-// 小头目出现的时间（秒）：第 2 关起每关都有，越往后越多
+// 小头目出现的时间（秒）：第 2 关起每关都有，20 关以后大幅加密
 function eliteSchedule(lv) {
   if (lv < 2) return [];
-  if (isBossLevel(lv)) return lv >= 18 ? [20, 40] : lv >= 9 ? [30] : [25];
+  if (isBossLevel(lv)) {
+    if (lv > 20) return lv >= 30 ? [10, 22, 34, 46] : [14, 28, 42];
+    return lv >= 18 ? [20, 40] : lv >= 9 ? [30] : [25];
+  }
+  if (lv > 20) return lv >= 28 ? [6, 13, 21, 29, 37, 45, 52] : [7, 15, 24, 33, 42, 50];
   return lv >= 20 ? [8, 18, 28, 38, 48] : lv >= 14 ? [12, 24, 36, 48] : lv >= 8 ? [15, 30, 45] : lv >= 5 ? [18, 40] : [22];
 }
-// 敌人潮：第 8 关起，关卡中途会有一大群敌人从同一个方向涌来
+// 敌人潮：第 8 关起，关卡中途会有一大群敌人从同一个方向涌来，20 关以后波次更密集
 function hordeSchedule(lv) {
   if (lv < 8) return [];
-  if (isBossLevel(lv)) return [36];
+  if (isBossLevel(lv)) return lv > 20 ? [18, 38] : [36];
+  if (lv > 20) return [10, 22, 35, 48];
   return lv >= 16 ? [14, 30, 46] : lv >= 12 ? [20, 40] : [28];
 }
 
@@ -557,7 +562,7 @@ function startLevel() {
     enemies: [], bullets: [], ebullets: [], fish: [], parts: [], texts: [], turrets: [],
     atkBuff: 0, catnipT: 0, catnipCd: 0, shockwaveCd: 0, missileLeft: missileBase(), redRageT: 0, reviveUsed: false,
     catLost: 0, nestLost: 0, catMax: fullCatHp, nestMax: nestMaxHp(), on: {}, starsSnd: 3,
-    boss: null, bossSpawned: false, bossHalfAsked: false, isBoss: isBossLevel(G.level),
+    boss: null, bossSpawned: false, bossHalfAsked: false, bossIntro: null, isBoss: isBossLevel(G.level),
     shake: 0, banner: 2.2, nestFlash: 0,
     drops: [], buffT: Object.fromEntries(BUFFS.filter(b => b.dur).map(b => [b.id, 0])),
     rings: [], bolts: [], helpers: [], trail: [], shAngle: 0, stormCd: 2, morphT: 0, stompT: 0, trailT: 0, form: null,
@@ -720,18 +725,45 @@ function burst(x, y, color, n = 6, speed = 120) {
 }
 
 // ---------- 敌人 ----------
-// 敌人血量随关卡增长得比较慢：武器品级倍率已经调低（S 级 ×11），血量也同比例缩小，难度和以前差不多，但数字不再夸张
-const hpScale = lv => Math.min(1 + 0.055 * (lv - 1), 1.6 + 0.015 * Math.max(0, lv - 12));
-const dmgScale = lv => (1 + 0.08 * (lv - 1)) * (1 + 0.025 * Math.max(0, lv - 8));
-const speedScale = lv => Math.min(1.7, 1 + 0.03 * (lv - 1));
-const ENEMY_CAP = 110;
+// 20 关以内保持平滑成长；20 关以后大幅提升血量、攻击、移速、高阶怪概率与刷怪密度
+const hpScale = lv => {
+  const base = Math.min(1 + 0.055 * (lv - 1), 1.6 + 0.015 * Math.max(0, lv - 12));
+  if (lv <= 20) return base;
+  const over20 = lv - 20;
+  return base * (1.85 + 0.55 * over20 + 0.04 * over20 * over20);
+};
+const dmgScale = lv => {
+  const base = (1 + 0.08 * (lv - 1)) * (1 + 0.025 * Math.max(0, lv - 8));
+  if (lv <= 20) return base;
+  const over20 = lv - 20;
+  return base * (1 + 0.16 * over20 + 0.008 * over20 * over20);
+};
+const speedScale = lv => {
+  if (lv <= 20) return Math.min(1.7, 1 + 0.03 * (lv - 1));
+  return Math.min(2.25, 1.57 + 0.045 * (lv - 20));
+};
+const enemyCapFor = lv => lv > 20 ? Math.min(165, 115 + (lv - 20) * 5) : 110;
+const enemyCountMulFor = lv => lv > 20 ? Math.min(1.18, ENEMY_COUNT_MUL + (lv - 20) * 0.045) : ENEMY_COUNT_MUL;
+const bossHpScale = lv => {
+  const base = 1 + 0.22 * (lv / BOSS_EVERY - 1);
+  if (lv <= 20) return base;
+  const over20 = lv - 20;
+  return base * (2.5 + 0.85 * over20 + 0.065 * over20 * over20);
+};
+const bossSizeScale = lv => lv <= 20 ? 1 : Math.min(1.85, 1.32 + 0.045 * (lv - 20));
+const bossSpeedScale = lv => lv <= 20 ? 1 : Math.min(1.45, 1 + 0.035 * (lv - 20));
+const bossCdScale = lv => lv <= 20 ? 1 : Math.max(0.62, 1 - 0.03 * (lv - 20));
+const bossLabel = (kind, lv) => lv >= 30 ? `深渊·${kind.name}` : lv > 20 ? `巨型·${kind.name}` : kind.name;
 function rollTier(lv) {
-  const p1 = clamp((lv - 4) * 0.035, 0, 0.3), p2 = clamp((lv - 9) * 0.025, 0, 0.22), p3 = clamp((lv - 14) * 0.018, 0, 0.15);
+  const over20 = Math.max(0, lv - 20);
+  const p1 = clamp((lv - 4) * 0.035, 0, over20 > 0 ? 0.24 : 0.3);
+  const p2 = clamp((lv - 9) * 0.025 + over20 * 0.02, 0, over20 > 0 ? 0.36 : 0.22);
+  const p3 = clamp((lv - 14) * 0.018 + over20 * 0.028, 0, over20 > 0 ? 0.44 : 0.15);
   const r = Math.random();
   const t = r < p3 ? 3 : r < p3 + p2 ? 2 : r < p3 + p2 + p1 ? 1 : 0;
-  return L && L.boss ? Math.min(t, 1) : t;
+  return L && L.boss ? Math.min(t, lv > 20 ? 2 : 1) : t;
 }
-const huntChance = (lv, tier) => lv >= 8 ? clamp(0.02 * (lv - 7) + 0.08 * tier, 0, 0.4) : 0;
+const huntChance = (lv, tier) => lv >= 8 ? clamp(0.02 * (lv - 7) + 0.08 * tier + Math.max(0, lv - 20) * 0.015, 0, lv > 20 ? 0.58 : 0.4) : 0;
 const edgePos = (side, along) => side === 0 ? { x: along, y: -20 } : side === 1 ? { x: along, y: WORLD.h + 20 } : side === 2 ? { x: -20, y: along } : { x: WORLD.w + 20, y: along };
 
 function spawnEnemy(type, pos, tierArg) {
@@ -746,15 +778,22 @@ function spawnEnemy(type, pos, tierArg) {
   const tier = special ? 0 : tierArg !== undefined ? tierArg : rollTier(lv), T = ETIERS[tier];
   let hp = d.hp * hpScale(lv) * T.hp;
   const kind = type === 'boss' ? bossFor(lv) : null;
-  // 头目血量翻倍（BOSS_HP_MULT = 3.0，为原版 1.5 的两倍）
-  if (kind) hp = d.hp * kind.hp * (1 + 0.22 * (lv / BOSS_EVERY - 1)) * BOSS_HP_MULT;
+  if (kind) hp = d.hp * kind.hp * bossHpScale(lv) * BOSS_HP_MULT;
+  const specialDmgMul = (1 + 0.08 * (lv - 1)) * (lv > 20 ? 1 + 0.18 * (lv - 20) : 1);
   const e = {
     type, tier, x, y, r: d.r * T.size, hp, maxHp: hp, spd: d.spd * speedScale(lv) * T.spd * rand(0.92, 1.08),
-    dmg: d.dmg * (special ? 1 + 0.08 * (lv - 1) : dmgScale(lv)) * T.dmg, cd: rand(0.3, 1), cd2: 0, flash: 0, face: 1, t: rand(0, 10), seed: rand(0, 6.28), summon: 4, dead: false,
+    dmg: d.dmg * (special ? specialDmgMul : dmgScale(lv)) * T.dmg, cd: rand(0.3, 1), cd2: 0, flash: 0, face: 1, t: rand(0, 10), seed: rand(0, 6.28), summon: 4, dead: false,
     stunT: 0, shockDist: 0, shockAngle: 0,
     hunter: d.target === 'cat' || (d.target === 'nest' && !special && Math.random() < huntChance(lv, tier)),
   };
-  if (kind) Object.assign(e, { kind, r: kind.r, spd: kind.spd, st: 'walk', stT: 0, stDur: 1, spCd: 3, atkAnim: 0, z: 0, dir: 0, walking: true, meteors: [], sub: '', atk: 0, tick: 0 });
+  if (kind) {
+    const sizeMul = bossSizeScale(lv);
+    Object.assign(e, {
+      kind, sizeMul, r: Math.round(kind.r * sizeMul), spd: kind.spd * bossSpeedScale(lv),
+      st: 'walk', stT: 0, stDur: 1, spCd: lv > 20 ? 2.2 : 3, atkAnim: 0, z: 0, dir: 0, walking: true,
+      meteors: [], sub: '', atk: 0, tick: 0, volley: 0, waveIdx: 0,
+    });
+  }
   L.enemies.push(e);
   if (!special) announceEnemy(type, tier);
   return e;
@@ -772,15 +811,22 @@ function announceEnemy(type, tier) {
 }
 
 // ---------- 头目行为 ----------
-const BOSS_ANIMALS = BOSSES.filter(b => b.id !== 'dragon');
-const BOSS_HP_MULT = 3.0; // 头目血量翻倍（原为 1.5，现翻倍为 3.0）
+const BOSS_APEX = BOSSES.filter(b => b.apex);
+const BOSS_ANIMALS = BOSSES.filter(b => !b.apex);
+const BOSS_HP_MULT = 3.5; // 头目基础血量倍率；20 关以后另叠加 bossHpScale 巨额增幅
 function bossFor(lv) {
   const n = Math.max(1, Math.floor(lv / BOSS_EVERY));
-  if (n % 5 === 0) return BOSSES.find(b => b.id === 'dragon');
+  if (n % 5 === 0) return BOSS_APEX[(Math.floor(n / 5) - 1) % BOSS_APEX.length];
   return BOSS_ANIMALS[(n - Math.floor(n / 5) - 1) % BOSS_ANIMALS.length];
 }
-const BOSS_WIND = { bark: 0.5, dash: 0.6, howl: 0.8, stomp: 0.9, spit: 0.5, pounce: 0.6, roar: 0.7, charge: 0.9 };
-const BOSS_RANGE = { dash: 520, spit: 560, pounce: 470, charge: 700 };
+const BOSS_WIND = {
+  bark: 0.5, dash: 0.6, howl: 0.8, stomp: 0.9, spit: 0.5, pounce: 0.6, roar: 0.7, charge: 0.9,
+  snap: 0.55, boulder: 0.85, venom: 0.65, sting: 0.6, quake: 0.95,
+};
+const BOSS_RANGE = {
+  dash: 520, spit: 560, pounce: 470, charge: 700,
+  snap: 470, boulder: 760, venom: 640, sting: 680,
+};
 function ring(x, y, max, color, life = 0.5, fill = false) { L.rings.push({ x, y, max, color, life, maxLife: life, fill }); }
 function bossState(e, st, t) { e.st = st; e.stT = t; e.stDur = t || 1; }
 function knockCat(from, power) {
@@ -791,10 +837,38 @@ function knockCat(from, power) {
 }
 function faceDir(e) { e.face = Math.cos(e.dir) < 0 ? -1 : 1; }
 
+// 统一更新天降陨石与巨石落点（巨龙 & 金刚猩猩共用）
+function updateFallingHazards(e, dt, c) {
+  if (!e.meteors || !e.meteors.length) return;
+  for (const m of e.meteors) {
+    m.t += dt;
+    if (!m.done && m.t >= m.delay) {
+      m.done = true;
+      const rad = m.rad || 74;
+      if (m.rock) {
+        ring(m.x, m.y, rad, '#c99b66', 0.45, true); ring(m.x, m.y, rad * 0.55, '#fff3d6', 0.28);
+        burst(m.x, m.y, '#8d7a68', 14, 230); burst(m.x, m.y, '#4a3423', 8, 150);
+        L.shake = Math.max(L.shake, 0.28); sfx.stomp();
+        if (dist(m, c) < rad + c.r) { hurtCat(e.dmg * 0.9); knockCat(m, 380); }
+        if (dist(m, NEST) < rad + NEST.r) hurtNest(e.dmg * 0.7);
+      } else {
+        ring(m.x, m.y, rad, '#ff6b3c', 0.45, true); ring(m.x, m.y, 40, '#fff7b0', 0.3);
+        burst(m.x, m.y, '#ff9a3c', 14, 220); burst(m.x, m.y, '#4a3423', 6, 140);
+        L.shake = Math.max(L.shake, 0.25); sfx.meteorHit();
+        if (dist(m, c) < rad + c.r) { hurtCat(e.dmg * 0.8); knockCat(m, 340); }
+        if (dist(m, NEST) < rad + NEST.r) hurtNest(e.dmg * 0.6);
+      }
+    }
+  }
+  e.meteors = e.meteors.filter(m => !m.done);
+}
+
 function updateBoss(e, dt, c) {
   const k = e.kind, sp = k.special, dCat = dist(e, c);
   e.atkAnim = Math.max(0, e.atkAnim - dt);
+  updateFallingHazards(e, dt, c);
   if (sp === 'dragon') return updateDragon(e, dt, c);
+  if (sp === 'phoenix') return updatePhoenix(e, dt, c);
   if (e.st === 'walk') {
     let spd = e.spd * (e.rage > 0 ? 1.3 : 1);
     if (ilv('fence') && dist(e, NEST) < FENCE_R) spd *= 1 - fenceSlow();
@@ -804,49 +878,113 @@ function updateBoss(e, dt, c) {
     else if (e.cd <= 0) { e.cd = 1.3; e.atkAnim = 0.4; hurtNest(e.dmg); }
     if (e.cd2 <= 0 && dCat < c.r + e.r - 6) { e.cd2 = 0.8; e.atkAnim = 0.4; hurtCat(e.dmg); }
     e.spCd -= dt;
-    const inRange = sp === 'stomp' ? (dist(e, NEST) < 250 || dCat < 210) : dCat < (BOSS_RANGE[sp] || 1e9);
+    const inRange = (sp === 'stomp' || sp === 'quake')
+      ? (dist(e, NEST) < 250 + e.r * 0.6 || dCat < 220 + e.r * 0.6)
+      : dCat < (BOSS_RANGE[sp] || 1e9);
     if (e.spCd <= 0 && inRange) {
       bossState(e, 'wind', BOSS_WIND[sp]);
       e.dir = Math.atan2(c.y - e.y, c.x - e.x); e.tx = c.x; e.ty = c.y;
-      if (sp !== 'bark' && sp !== 'howl' && sp !== 'stomp' && sp !== 'roar') faceDir(e);
-      if (sp === 'howl') sfx.howl(); else if (sp === 'stomp') sfx.trumpet(); else if (sp === 'roar') sfx.roar(); else if (sp === 'charge') sfx.boss();
+      if (sp !== 'bark' && sp !== 'howl' && sp !== 'stomp' && sp !== 'roar' && sp !== 'quake') faceDir(e);
+      if (sp === 'howl') sfx.howl();
+      else if (sp === 'stomp' || sp === 'quake') sfx.trumpet();
+      else if (sp === 'roar' || sp === 'boulder') sfx.roar();
+      else if (sp === 'charge' || sp === 'snap') sfx.boss();
+      else if (sp === 'sting') sfx.boarWind();
+      else if (sp === 'venom') sfx.spit();
+      if (sp === 'boulder') {
+        const count = 4 + Math.min(4, Math.floor(Math.max(0, G.level - 18) / 4));
+        const rad = Math.round(72 + Math.max(0, e.r - 50) * 0.45);
+        for (let i = 0; i < count; i++) {
+          const nearNest = i % 3 === 2;
+          const tx = (nearNest ? NEST.x : c.x) + rand(-125, 125), ty = (nearNest ? NEST.y : c.y) + rand(-125, 125);
+          e.meteors.push({ x: clamp(tx, 50, WORLD.w - 50), y: clamp(ty, 50, WORLD.h - 50), t: 0, delay: 0.85 + i * 0.24, rad, rock: true, done: false });
+        }
+      }
     }
     return;
   }
   e.walking = false;
   e.stT -= dt;
   if (e.st === 'wind') {
-    if ((sp === 'charge' && e.stT > 0.35) || (sp === 'dash' && e.stT > 0.2)) { e.dir = Math.atan2(c.y - e.y, c.x - e.x); faceDir(e); }
+    if ((sp === 'charge' && e.stT > 0.35) || ((sp === 'dash' || sp === 'snap') && e.stT > 0.2)) { e.dir = Math.atan2(c.y - e.y, c.x - e.x); faceDir(e); }
     if (e.stT <= 0) bossAct(e, c);
   } else if (e.st === 'act') {
-    if (sp === 'dash' || sp === 'charge') {
-      const v = sp === 'dash' ? 560 : 640;
+    if (sp === 'dash' || sp === 'charge' || sp === 'snap') {
+      const v = sp === 'charge' ? 650 : sp === 'snap' ? 600 : 560;
       e.x += Math.cos(e.dir) * v * dt; e.y += Math.sin(e.dir) * v * dt;
-      if (Math.random() < 0.6) L.parts.push({ x: e.x - Math.cos(e.dir) * e.r, y: e.y + e.r * 0.7, vx: rand(-40, 40), vy: rand(-40, 0), life: 0.4, color: '#e3cf9a', r: rand(3, 6) });
+      if (Math.random() < 0.6 && L.parts.length < maxParts()) {
+        L.parts.push({ x: e.x - Math.cos(e.dir) * e.r, y: e.y + e.r * 0.7, vx: rand(-40, 40), vy: rand(-40, 0), life: 0.4, color: '#e3cf9a', r: rand(3, 6) });
+      }
       if (!e.hitOnce && dCat < c.r + e.r) { e.hitOnce = true; hurtCat(e.dmg * (sp === 'dash' ? 0.9 : 1.2)); knockCat(e, 420); }
-      if (sp === 'charge' && !e.nestOnce && dist(e, NEST) < NEST.r + e.r) { e.nestOnce = true; hurtNest(e.dmg * 1.2); L.shake = 0.3; sfx.stomp(); }
+      if ((sp === 'charge' || sp === 'snap') && !e.nestOnce && dist(e, NEST) < NEST.r + e.r) { e.nestOnce = true; hurtNest(e.dmg * 1.15); L.shake = 0.3; sfx.stomp(); }
       const out = e.x < 30 || e.x > WORLD.w - 30 || e.y < 30 || e.y > WORLD.h - 30;
       if (out) { e.x = clamp(e.x, 30, WORLD.w - 30); e.y = clamp(e.y, 30, WORLD.h - 30); }
-      if (out || e.stT <= 0) bossState(e, 'rest', sp === 'dash' ? 0.4 : 0.7);
+      if (out || e.stT <= 0) {
+        if (sp === 'snap') {
+          const tailR = 155 + Math.round(e.r * 0.55);
+          ring(e.x, e.y, tailR, '#6fe06f', 0.42, true);
+          ring(e.x, e.y, tailR * 0.6, '#fff7b0', 0.28);
+          L.shake = Math.max(L.shake, 0.32); sfx.stomp();
+          if (dist(e, c) < tailR + c.r) { hurtCat(e.dmg * 0.95); knockCat(e, 400); }
+          if (dist(e, NEST) < tailR + NEST.r) hurtNest(e.dmg * 0.65);
+        }
+        bossState(e, 'rest', sp === 'dash' ? 0.4 : sp === 'snap' ? 0.48 : 0.7);
+      }
     } else if (sp === 'pounce') {
       const p = clamp(1 - e.stT / e.stDur, 0, 1);
       e.x = e.sx + (e.tx - e.sx) * p; e.y = e.sy + (e.ty - e.sy) * p; e.z = Math.sin(Math.PI * p) * 95;
       if (e.stT <= 0) {
-        e.z = 0; ring(e.x, e.y, 90, '#ffb347'); L.shake = 0.35; sfx.stomp();
+        const landR = 85 + Math.max(0, e.r - 40) * 0.6;
+        e.z = 0; ring(e.x, e.y, landR, '#ffb347'); L.shake = 0.35; sfx.stomp();
         burst(e.x, e.y + e.r * 0.6, '#e3cf9a', 14, 200);
-        if (dist(e, c) < 85) { hurtCat(e.dmg * 1.1); knockCat(e, 300); }
+        if (dist(e, c) < landR) { hurtCat(e.dmg * 1.1); knockCat(e, 300); }
         bossState(e, 'rest', 0.5);
       }
+    } else if (sp === 'sting') {
+      e.tick -= dt;
+      if (e.tick <= 0 && e.volley > 0) {
+        e.volley--;
+        e.tick = 0.22;
+        const ox = e.x + e.face * e.r * 0.35, oy = e.y - e.r * 0.85;
+        const a0 = Math.atan2(c.y - oy, c.x - ox);
+        e.face = Math.cos(a0) < 0 ? -1 : 1;
+        const half = G.level >= 25 ? 2 : 1;
+        for (let i = -half; i <= half; i++) {
+          const a = a0 + i * 0.16;
+          L.ebullets.push({ x: ox, y: oy, vx: Math.cos(a) * 335, vy: Math.sin(a) * 335, dmg: e.dmg * 0.62, life: 2.5, r: 7, stinger: true });
+        }
+        sfx.spit();
+        if (e.volley === 0) {
+          const cnt = G.level > 20 ? 3 : 2;
+          for (let i = 0; i < cnt; i++) spawnEnemy('bomber', { x: e.x + rand(-75, 75), y: e.y + rand(-75, 75) });
+        }
+      }
+      if (e.stT <= 0) bossState(e, 'rest', 0.5);
+    } else if (sp === 'quake') {
+      e.tick -= dt;
+      if (e.tick <= 0 && e.waveIdx < 3) {
+        const radii = [165, 245, 325];
+        const qR = radii[e.waveIdx] + Math.round(Math.max(0, e.r - 55) * 0.7);
+        e.waveIdx++;
+        e.tick = 0.3;
+        ring(e.x, e.y, qR, '#6fe8ff', 0.48, true);
+        ring(e.x, e.y, qR * 0.65, '#ffffff', 0.3);
+        burst(e.x, e.y, '#9be7ff', 14, 240);
+        L.shake = Math.max(L.shake, 0.42); sfx.stomp();
+        if (dist(e, c) < qR) { hurtCat(e.dmg * 0.85); knockCat(e, 390); }
+        if (dist(e, NEST) < qR + NEST.r * 0.6) hurtNest(e.dmg * 0.6);
+      }
+      if (e.stT <= 0) bossState(e, 'rest', 0.6);
     }
   } else if (e.stT <= 0) {
-    e.spCd = k.cd * (e.hp < e.maxHp / 2 ? 0.7 : 1);
+    e.spCd = k.cd * bossCdScale(G.level) * (e.hp < e.maxHp / 2 ? 0.68 : 1);
     bossState(e, 'walk', 0);
   }
 }
 
 // ---------- 巨龙：喷火扫射 + 陨石雨 ----------
 const dragonMouth = e => ({ x: e.x + e.face * e.r * 0.9, y: e.y - e.z * 0.7 - e.r * 0.25 });
-const BREATH_LEN = 440, BREATH_HALF = 0.3;
+const BREATH_LEN = 460, BREATH_HALF = 0.3;
 function inCone(o, a, p, pad = 0) {
   const d = Math.hypot(p.x - o.x, p.y - o.y);
   if (d > BREATH_LEN + pad) return false;
@@ -857,18 +995,6 @@ function inCone(o, a, p, pad = 0) {
 function updateDragon(e, dt, c) {
   const k = e.kind;
   e.z = 22 + Math.sin(e.t * 3) * 6;
-  for (const m of e.meteors) {
-    m.t += dt;
-    if (!m.done && m.t >= m.delay) {
-      m.done = true;
-      ring(m.x, m.y, 74, '#ff6b3c', 0.45, true); ring(m.x, m.y, 40, '#fff7b0', 0.3);
-      burst(m.x, m.y, '#ff9a3c', 14, 220); burst(m.x, m.y, '#4a3423', 6, 140);
-      L.shake = Math.max(L.shake, 0.25); sfx.meteorHit();
-      if (dist(m, c) < 74 + c.r) { hurtCat(e.dmg * 0.8); knockCat(m, 340); }
-      if (dist(m, NEST) < 74 + NEST.r) hurtNest(e.dmg * 0.6);
-    }
-  }
-  e.meteors = e.meteors.filter(m => !m.done);
   const dCat = dist(e, c);
   if (e.st === 'walk') {
     e.walking = true;
@@ -884,11 +1010,11 @@ function updateDragon(e, dt, c) {
       if (e.sub === 'breath') bossState(e, 'wind', 1.0);
       else {
         bossState(e, 'wind', 0.7);
-        const n = 5 + Math.floor(G.level / 15);
+        const n = 5 + Math.floor(G.level / 10);
         for (let i = 0; i < n; i++) {
           const nearNest = i % 3 === 2;
-          const tx = (nearNest ? NEST.x : c.x) + rand(-110, 110), ty = (nearNest ? NEST.y : c.y) + rand(-110, 110);
-          e.meteors.push({ x: clamp(tx, 40, WORLD.w - 40), y: clamp(ty, 40, WORLD.h - 40), t: 0, delay: 1.0 + i * 0.28, done: false });
+          const tx = (nearNest ? NEST.x : c.x) + rand(-120, 120), ty = (nearNest ? NEST.y : c.y) + rand(-120, 120);
+          e.meteors.push({ x: clamp(tx, 40, WORLD.w - 40), y: clamp(ty, 40, WORLD.h - 40), t: 0, delay: 0.95 + i * 0.25, rad: 78, done: false });
         }
         sfx.meteorFall();
       }
@@ -904,7 +1030,7 @@ function updateDragon(e, dt, c) {
     }
     if (e.stT <= 0) {
       if (e.sub === 'breath') { e.dir0 = e.dir; e.fire = e.dir; e.tick = 0; sfx.fireBreath(); bossState(e, 'act', 1.5); }
-      else bossState(e, 'act', Math.max(0.3, 0.6 + (e.meteors.length - 1) * 0.28));
+      else bossState(e, 'act', Math.max(0.3, 0.6 + (e.meteors.length - 1) * 0.25));
     }
   } else if (e.st === 'act') {
     if (e.sub === 'breath') {
@@ -917,14 +1043,97 @@ function updateDragon(e, dt, c) {
         if (inCone(o, e.fire, c, c.r)) hurtCat(e.dmg * 0.55);
         if (inCone(o, e.fire, NEST, NEST.r)) hurtNest(e.dmg * 0.2);
       }
-      for (let i = 0; i < 3; i++) {
+      for (let i = 0; i < 3 && L.parts.length < maxParts(); i++) {
         const a = e.fire + rand(-BREATH_HALF, BREATH_HALF), v = rand(280, 520);
         L.parts.push({ x: o.x, y: o.y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, life: rand(0.25, 0.5), color: ['#ff6b3c', '#ffb347', '#ffe066'][randInt(0, 2)], r: rand(4, 9) });
       }
     }
     if (e.stT <= 0) bossState(e, 'rest', 0.7);
   } else if (e.stT <= 0) {
-    e.spCd = k.cd * (e.hp < e.maxHp / 2 ? 0.7 : 1);
+    e.spCd = k.cd * bossCdScale(G.level) * (e.hp < e.maxHp / 2 ? 0.68 : 1);
+    bossState(e, 'walk', 0);
+  }
+}
+
+// ---------- 烈焰凤凰：烈焰羽雨 + 炽焰俯冲 ----------
+function updatePhoenix(e, dt, c) {
+  const k = e.kind;
+  e.z = 26 + Math.sin(e.t * 4) * 7;
+  const dCat = dist(e, c);
+  if (e.st === 'walk') {
+    e.walking = true;
+    const dx = NEST.x - e.x, dy = NEST.y - e.y, dd = Math.hypot(dx, dy) || 1;
+    if (dd > 240) { e.x += dx / dd * e.spd * dt; e.y += dy / dd * e.spd * dt; }
+    else { const a = Math.atan2(e.y - NEST.y, e.x - NEST.x) - dt * 0.32; e.x = NEST.x + Math.cos(a) * dd; e.y = NEST.y + Math.sin(a) * dd; }
+    e.face = c.x < e.x ? -1 : 1;
+    if (e.cd2 <= 0 && dCat < c.r + e.r * 0.85) { e.cd2 = 0.85; e.atkAnim = 0.4; hurtCat(e.dmg); knockCat(e, 340); }
+    e.spCd -= dt;
+    if (e.spCd <= 0) {
+      e.atk++; e.sub = e.atk % 2 ? 'feathers' : 'dive';
+      sfx.dragonRoar();
+      e.dir = Math.atan2(c.y - e.y, c.x - e.x);
+      faceDir(e);
+      bossState(e, 'wind', e.sub === 'feathers' ? 0.75 : 0.85);
+    }
+    return;
+  }
+  e.walking = true;
+  e.stT -= dt;
+  if (e.st === 'wind') {
+    if (e.sub === 'dive' && e.stT > 0.25) { e.dir = Math.atan2(c.y - e.y, c.x - e.x); faceDir(e); }
+    if (e.stT <= 0) {
+      e.hitOnce = false; e.nestOnce = false;
+      if (e.sub === 'feathers') {
+        e.volley = 3; e.tick = 0; e.fire = Math.atan2(c.y - e.y, c.x - e.x);
+        bossState(e, 'act', 1.05);
+      } else {
+        sfx.fireBreath();
+        bossState(e, 'act', 0.85);
+      }
+    }
+  } else if (e.st === 'act') {
+    if (e.sub === 'feathers') {
+      e.tick -= dt;
+      if (e.tick <= 0 && e.volley > 0) {
+        e.volley--;
+        e.tick = 0.32;
+        const bolts = G.level >= 25 ? 10 : 8;
+        const rot = e.fire + (2 - e.volley) * 0.26;
+        for (let i = 0; i < bolts; i++) {
+          const a = rot + (TAU * i) / bolts;
+          L.ebullets.push({ x: e.x, y: e.y - e.z * 0.5, vx: Math.cos(a) * 285, vy: Math.sin(a) * 285, dmg: e.dmg * 0.6, life: 2.8, r: 7, feather: true });
+        }
+        ring(e.x, e.y - e.z * 0.4, 130, '#ff8c2b', 0.35);
+        sfx.spit();
+        if (e.volley === 0) {
+          spawnEnemy('crow', { x: e.x + rand(-80, 80), y: e.y + rand(-80, 80) });
+          spawnEnemy('bat', { x: e.x + rand(-80, 80), y: e.y + rand(-80, 80) });
+        }
+      }
+      if (e.stT <= 0) bossState(e, 'rest', 0.55);
+    } else {
+      const v = 700;
+      e.x += Math.cos(e.dir) * v * dt; e.y += Math.sin(e.dir) * v * dt;
+      if (L.parts.length < maxParts()) {
+        L.parts.push({ x: e.x, y: e.y - e.z * 0.4, vx: rand(-60, 60), vy: rand(-60, 60), life: 0.42, color: Math.random() < 0.5 ? '#ff6b3c' : '#ffe066', r: rand(5, 10) });
+      }
+      if (!e.hitOnce && dCat < c.r + e.r * 0.9) { e.hitOnce = true; hurtCat(e.dmg * 1.25); knockCat(e, 460); }
+      if (!e.nestOnce && dist(e, NEST) < NEST.r + e.r * 0.9) { e.nestOnce = true; hurtNest(e.dmg * 1.1); L.shake = 0.35; }
+      const out = e.x < 40 || e.x > WORLD.w - 40 || e.y < 40 || e.y > WORLD.h - 40;
+      if (out) { e.x = clamp(e.x, 40, WORLD.w - 40); e.y = clamp(e.y, 40, WORLD.h - 40); }
+      if (out || e.stT <= 0) {
+        const boomR = 155 + Math.round(e.r * 0.45);
+        ring(e.x, e.y, boomR, '#ff6b3c', 0.48, true);
+        ring(e.x, e.y, boomR * 0.55, '#ffe066', 0.3);
+        burst(e.x, e.y, '#ff9a3c', 18, 260);
+        L.shake = Math.max(L.shake, 0.38); sfx.meteorHit();
+        if (dist(e, c) < boomR + c.r) { hurtCat(e.dmg * 0.85); knockCat(e, 380); }
+        if (dist(e, NEST) < boomR + NEST.r) hurtNest(e.dmg * 0.6);
+        bossState(e, 'rest', 0.65);
+      }
+    }
+  } else if (e.stT <= 0) {
+    e.spCd = k.cd * bossCdScale(G.level) * (e.hp < e.maxHp / 2 ? 0.68 : 1);
     bossState(e, 'walk', 0);
   }
 }
@@ -947,9 +1156,9 @@ function updateCharger(e, dt, c) {
     if (e.mt <= 0) { e.mode = 'charge'; e.mt = 0.9; e.hit = false; sfx.dash(); }
   } else if (e.mode === 'charge') {
     e.mt -= dt;
-    const v = 430 * Math.min(1.3, 1 + 0.01 * G.level);
+    const v = 430 * Math.min(1.45, 1 + 0.012 * G.level);
     e.x += Math.cos(e.dir) * v * dt; e.y += Math.sin(e.dir) * v * dt;
-    if (Math.random() < 0.7) L.parts.push({ x: e.x - Math.cos(e.dir) * e.r, y: e.y + e.r * 0.7, vx: rand(-40, 40), vy: rand(-40, 0), life: 0.4, color: '#e3cf9a', r: rand(3, 6) });
+    if (Math.random() < 0.7 && L.parts.length < maxParts()) L.parts.push({ x: e.x - Math.cos(e.dir) * e.r, y: e.y + e.r * 0.7, vx: rand(-40, 40), vy: rand(-40, 0), life: 0.4, color: '#e3cf9a', r: rand(3, 6) });
     if (!e.hit && dCat < c.r + e.r) { e.hit = true; hurtCat(e.dmg * 1.2); knockCat(e, 380); }
     if (dist(e, NEST) < NEST.r + e.r) { hurtNest(e.dmg * 1.2); e.mt = 0; L.shake = Math.max(L.shake, 0.2); }
     if (e.x < 20 || e.x > WORLD.w - 20 || e.y < 20 || e.y > WORLD.h - 20) { e.x = clamp(e.x, 20, WORLD.w - 20); e.y = clamp(e.y, 20, WORLD.h - 20); e.mt = 0; }
@@ -981,36 +1190,63 @@ function bomberBlast(e, c) {
 }
 
 function bossAct(e, c) {
-  const sp = e.kind.special, lv = G.level, around = () => ({ x: e.x + rand(-70, 70), y: e.y + rand(-70, 70) });
+  const sp = e.kind.special, lv = G.level, around = () => ({ x: e.x + rand(-75, 75), y: e.y + rand(-75, 75) });
   e.hitOnce = false; e.nestOnce = false;
   if (sp === 'bark') {
-    for (let i = 0; i < 2 + Math.floor(lv / 9); i++) spawnEnemy('mouse', around());
+    for (let i = 0; i < 2 + Math.floor(lv / 7); i++) spawnEnemy(lv > 20 && i % 2 ? 'bomber' : 'mouse', around());
     addText(e.x, e.y - e.r - 34, '汪！汪！', '#fff', 20, 1.1); sfx.bark();
     bossState(e, 'rest', 0.4);
   } else if (sp === 'dash') { sfx.dash(); bossState(e, 'act', 0.45); }
+  else if (sp === 'snap') { sfx.dash(); bossState(e, 'act', 0.42); }
   else if (sp === 'howl') {
-    for (let i = 0; i < 4; i++) spawnEnemy('roach', around());
-    for (const o of L.enemies) o.rage = 4;
+    for (let i = 0; i < (lv > 20 ? 6 : 4); i++) spawnEnemy(lv > 20 && i % 2 ? 'bat' : 'roach', around());
+    for (const o of L.enemies) o.rage = 4.5;
     ring(e.x, e.y, 280, '#cfd8e6', 0.7); ring(e.x, e.y, 200, '#cfd8e6', 0.5);
     addText(e.x, e.y - e.r - 34, '嗷呜——', '#fff', 20, 1.2);
     bossState(e, 'rest', 0.5);
   } else if (sp === 'stomp') {
-    ring(e.x, e.y, 210, '#ffb347', 0.5); ring(e.x, e.y, 140, '#fff', 0.35);
+    const stR = 210 + Math.round(Math.max(0, e.r - 52) * 0.8);
+    ring(e.x, e.y, stR, '#ffb347', 0.5); ring(e.x, e.y, stR * 0.66, '#fff', 0.35);
     L.shake = 0.55; sfx.stomp();
-    if (dist(e, c) < 210) { hurtCat(e.dmg * 1.2); knockCat(e, 380); }
-    if (dist(e, NEST) < 210 + NEST.r) hurtNest(e.dmg);
+    if (dist(e, c) < stR) { hurtCat(e.dmg * 1.2); knockCat(e, 380); }
+    if (dist(e, NEST) < stR + NEST.r) hurtNest(e.dmg);
     bossState(e, 'rest', 0.5);
+  } else if (sp === 'boulder') {
+    ring(e.x, e.y, 160 + e.r * 0.4, '#c99b66', 0.45, true);
+    L.shake = 0.45; sfx.stomp();
+    addText(e.x, e.y - e.r - 34, '轰隆！', '#ffe066', 22, 1.1);
+    bossState(e, 'rest', 0.55);
+  } else if (sp === 'venom') {
+    const oy = e.y - e.r * 1.15, a0 = Math.atan2(c.y - oy, c.x - e.x);
+    const n = lv > 20 ? 12 : 9;
+    for (let i = 0; i < n; i++) {
+      const a = a0 + (TAU * i) / n;
+      L.ebullets.push({ x: e.x, y: oy, vx: Math.cos(a) * 240, vy: Math.sin(a) * 240, dmg: e.dmg * 0.65, life: 3.0, r: 8, col: '#56e35a' });
+    }
+    ring(e.x, oy, 110, '#56e35a', 0.4);
+    for (let i = 0; i < (lv >= 25 ? 3 : 2); i++) spawnEnemy('snake', around());
+    sfx.spit();
+    bossState(e, 'rest', 0.45);
+  } else if (sp === 'sting') {
+    e.volley = 3; e.tick = 0;
+    bossState(e, 'act', 0.72);
+  } else if (sp === 'quake') {
+    e.waveIdx = 0; e.tick = 0;
+    addText(e.x, e.y - e.r - 36, '冰霜践踏！', '#9be7ff', 22, 1.2);
+    bossState(e, 'act', 0.95);
   } else if (sp === 'spit') {
     const hx = e.x + e.face * e.r * 0.7, hy = e.y - e.r * 2.1, a0 = Math.atan2(c.y - hy, c.x - hx);
-    for (let i = -2; i <= 2; i++) L.ebullets.push({ x: hx, y: hy, vx: Math.cos(a0 + i * 0.22) * 250, vy: Math.sin(a0 + i * 0.22) * 250, dmg: e.dmg * 0.6, life: 2.6, r: 7, leaf: true });
+    const half = lv > 20 ? 3 : 2;
+    for (let i = -half; i <= half; i++) L.ebullets.push({ x: hx, y: hy, vx: Math.cos(a0 + i * 0.2) * 260, vy: Math.sin(a0 + i * 0.2) * 260, dmg: e.dmg * 0.6, life: 2.6, r: 7, leaf: true });
     sfx.spit();
     bossState(e, 'rest', 0.3);
   } else if (sp === 'pounce') { e.sx = e.x; e.sy = e.y; sfx.dash(); bossState(e, 'act', 0.55); }
   else if (sp === 'roar') {
-    ring(e.x, e.y, 290, '#ffd27a', 0.6); ring(e.x, e.y, 220, '#ffd27a', 0.45); ring(e.x, e.y, 150, '#fff', 0.3);
+    const roarR = 290 + Math.round(Math.max(0, e.r - 44) * 0.8);
+    ring(e.x, e.y, roarR, '#ffd27a', 0.6); ring(e.x, e.y, roarR * 0.75, '#ffd27a', 0.45); ring(e.x, e.y, roarR * 0.5, '#fff', 0.3);
     L.shake = 0.45;
-    if (dist(e, c) < 290) { hurtCat(e.dmg * 0.6); knockCat(e, 620); }
-    spawnEnemy('raccoon', around()); spawnEnemy('mouse', around()); spawnEnemy('mouse', around());
+    if (dist(e, c) < roarR) { hurtCat(e.dmg * 0.6); knockCat(e, 620); }
+    spawnEnemy(lv > 20 ? 'bear' : 'raccoon', around()); spawnEnemy('mouse', around()); spawnEnemy('mouse', around());
     addText(e.x, e.y - e.r - 34, '吼——！', '#fff', 22, 1.2);
     bossState(e, 'rest', 0.5);
   } else if (sp === 'charge') { sfx.dash(); bossState(e, 'act', 1.1); }
@@ -1018,22 +1254,29 @@ function bossAct(e, c) {
 
 function pickType(lv) {
   const pool = Object.keys(ENEMIES).filter(k => ENEMIES[k].w && ENEMIES[k].from <= lv);
-  const wt = k => ENEMIES[k].w * (ENEMIES[k].weak ? Math.max(0.2, 1 - 0.06 * Math.max(0, lv - 6)) : 1);
+  const heavy = k => k === 'bear' || k === 'slime' || k === 'bomber' || k === 'healer' || k === 'boar' || k === 'snake';
+  const wt = k => {
+    let w = ENEMIES[k].w;
+    if (ENEMIES[k].weak) w *= Math.max(lv > 20 ? 0.08 : 0.2, 1 - 0.06 * Math.max(0, lv - 6));
+    else if (lv > 20 && heavy(k)) w *= 1.45;
+    return w;
+  };
   let total = 0; for (const k of pool) total += wt(k);
   let r = Math.random() * total;
   for (const k of pool) { r -= wt(k); if (r <= 0) return k; }
   return pool[0];
 }
 function spawnWave() {
-  if (L.enemies.length >= ENEMY_CAP) return;
+  if (L.enemies.length >= enemyCapFor(G.level)) return;
   const type = pickType(G.level), n = ENEMIES[type].group || 1, tier = rollTier(G.level);
   const first = spawnEnemy(type, undefined, tier);
   for (let i = 1; i < n; i++) spawnEnemy(type, { x: first.x + rand(-30, 30), y: first.y + rand(-30, 30) }, tier);
 }
-// 每关怪物数量系数（整体减少 30%）
+// 基础怪物数量系数（20 关以后由 enemyCountMulFor 逐步拉升至 1.18）
 const ENEMY_COUNT_MUL = 0.7;
 function hordeBurst() {
-  const lv = G.level, side = randInt(0, 3), n = Math.min(Math.floor((6 + lv * 0.7) * (L.boss ? 0.6 : 1) * ENEMY_COUNT_MUL), Math.max(0, ENEMY_CAP - L.enemies.length));
+  const lv = G.level, side = randInt(0, 3), cap = enemyCapFor(lv);
+  const n = Math.min(Math.floor((6 + lv * (lv > 20 ? 1.05 : 0.7)) * (L.boss ? 0.65 : 1) * enemyCountMulFor(lv)), Math.max(0, cap - L.enemies.length));
   const mid = side < 2 ? rand(300, WORLD.w - 300) : rand(250, WORLD.h - 250);
   for (let i = 0; i < n; i++) {
     const p = edgePos(side, mid + rand(-170, 170)), out = rand(0, 90);
@@ -1103,14 +1346,11 @@ function triggerComboFx(x, y, combo, ct, tierUp) {
         spin: rand(-7, 7),
       });
     }
-    if (milestone) {
-      if (tierUp) {
-        ring(L.cat.x, L.cat.y, 82, ct.color, 0.45);
-        if (L.parts.length < cap) {
-          L.parts.push({ x: L.cat.x, y: L.cat.y, vx: 0, vy: 0, life: 0.24, max: 0.24, k: 'flash', color: ct.color, r: 24 });
-        }
+    if (milestone && tierUp) {
+      ring(L.cat.x, L.cat.y, 82, ct.color, 0.45);
+      if (L.parts.length < cap) {
+        L.parts.push({ x: L.cat.x, y: L.cat.y, vx: 0, vy: 0, life: 0.24, max: 0.24, k: 'flash', color: ct.color, r: 24 });
       }
-      L.shake = Math.max(L.shake, combo >= 20 ? 0.2 : combo >= 10 ? 0.14 : 0.09);
     }
   }
   if (milestone) {
@@ -1151,9 +1391,6 @@ function damageEnemy(e, dmg) {
     }
     if (L.combo >= 5) {
       triggerComboFx(e.x, e.y, L.combo, ct, tierUp);
-    }
-    if (L.combo >= 20) {
-      L.shake = Math.max(L.shake, L.combo >= 30 ? 0.16 : 0.11);
     }
     if (L.combo >= 2 || e.type === 'boss' || e.type === 'elite') {
       addText(e.x + rand(-10, 10), e.y - e.r - 20, `+${pts}分`, ct.color, L.combo >= 10 ? 15 : 13, 0.95);
@@ -1403,7 +1640,114 @@ function updateGadgets(dt) {
   L.bolts = L.bolts.filter(b => b.life > 0);
 }
 
+const smoothstep = x => { const t = clamp(x, 0, 1); return t * t * (3 - 2 * t); };
+
+function bossIntroCamWeight(bi) {
+  if (!bi) return 0;
+  const inW = smoothstep(bi.t / 0.42);
+  const outW = 1 - smoothstep((bi.t - (bi.dur - 0.45)) / 0.45);
+  return inW * outW;
+}
+
+function startBossIntro(boss) {
+  const bName = bossLabel(boss.kind, G.level);
+  const pad = Math.max(175, boss.r + 75);
+  const dx = NEST.x - boss.x, dy = NEST.y - boss.y, dd = Math.hypot(dx, dy) || 1;
+  const stepIn = 185 + boss.r * 0.55;
+  const tx = clamp(boss.x + (dx / dd) * stepIn, pad, WORLD.w - pad);
+  const ty = clamp(boss.y + (dy / dd) * stepIn, pad, WORLD.h - pad);
+  boss.face = tx > NEST.x ? -1 : 1;
+  boss.walking = true;
+  boss.st = 'walk';
+  L.banner = 0;
+  L.bossIntro = {
+    t: 0,
+    dur: 2.45,
+    boss,
+    name: bName,
+    tip: boss.kind.tip || '',
+    isApex: !!boss.kind.apex,
+    isMega: G.level > 20,
+    sx: boss.x, sy: boss.y,
+    tx, ty,
+    roared: false,
+  };
+  L.shake = Math.max(L.shake, 0.22);
+  sfx.bossIntro();
+  announce(`BOSS来袭！${bName}`);
+}
+
+function updateBossIntro(rawDt) {
+  const bi = L.bossIntro;
+  if (!bi || !bi.boss || bi.boss.dead) { L.bossIntro = null; return; }
+  const b = bi.boss;
+  bi.t += rawDt;
+  L.shake = Math.max(0, L.shake - rawDt);
+  b.t += rawDt * 1.45;
+  b.atkAnim = Math.max(0, b.atkAnim - rawDt);
+  if (b.kind.special === 'dragon' || b.kind.special === 'phoenix') {
+    b.z = 26 + Math.sin(b.t * 4) * 7;
+  }
+
+  // 前 0.68 秒：Boss 从边缘迈步/俯冲入场至聚光灯落位点
+  const walkDur = 0.68;
+  if (bi.t < walkDur) {
+    const p = 1 - Math.pow(1 - clamp(bi.t / walkDur, 0, 1), 3);
+    b.x = bi.sx + (bi.tx - bi.sx) * p;
+    b.y = bi.sy + (bi.ty - bi.sy) * p;
+    b.walking = true;
+    if (Math.random() < 0.45 && L.parts.length < maxParts()) {
+      L.parts.push({
+        x: b.x + rand(-b.r * 0.5, b.r * 0.5),
+        y: b.y + b.r * 0.6,
+        vx: rand(-35, 35), vy: rand(-25, 10),
+        life: rand(0.28, 0.48), color: '#e6d3a3', r: rand(3, 6),
+      });
+    }
+  } else {
+    b.x = bi.tx; b.y = bi.ty;
+    if (!bi.roared) {
+      bi.roared = true;
+      b.walking = false;
+      b.atkAnim = 0.85;
+      L.shake = Math.max(L.shake, 0.26);
+      if (bi.isApex) sfx.dragonRoar(); else sfx.roar();
+      sfx.stomp();
+      const ringCol = bi.isApex ? '#ff7a2b' : bi.isMega ? '#ff5c77' : '#ffe066';
+      ring(b.x, b.y, b.r * 3.1, ringCol, 0.62, true);
+      ring(b.x, b.y, b.r * 2.0, '#fff7d6', 0.42);
+      burst(b.x, b.y, ringCol, 16, 220);
+      burst(b.x, b.y, '#fff3c4', 8, 150);
+    }
+  }
+
+  // 镜头平滑缩放聚焦 Boss
+  const cw = bossIntroCamWeight(bi);
+  const targetZoom = 1 + 0.16 * cw;
+  camZoom += (targetZoom - camZoom) * Math.min(1, rawDt * 10);
+
+  // 过场期间仅驱动特效环与粒子，其余战斗与计时暂停，避免玩家在过场中意外受伤
+  for (const r of L.rings) r.life -= rawDt;
+  L.rings = L.rings.filter(r => r.life > 0);
+  for (const p of L.parts) { p.x += p.vx * rawDt; p.y += p.vy * rawDt; p.life -= rawDt; }
+  L.parts = L.parts.filter(p => p.life > 0);
+
+  if (bi.t >= bi.dur) {
+    b.walking = true;
+    b.atkAnim = 0;
+    const bName = bi.name, bTip = bi.tip;
+    L.bossIntro = null;
+    L.notice = { text: `关底头目登场：${bName}（${bTip}）`, t: 3.6 };
+    L.saidNotice = L.notice; // 入场横幅已播报过语音，避免与紧随其后的答题朗读冲突
+    openQuiz(`${bName}在关卡最后出现了！`);
+  }
+}
+
 function update(rawDt) {
+  if (L.bossIntro) {
+    updateBossIntro(rawDt);
+    return;
+  }
   const c = L.cat;
   // 处理答对中文题后的 5 秒慢镜头特写与金光巨化计时（按真实秒数倒计时 5 秒）
   let timeScale = 1;
@@ -1503,25 +1847,26 @@ function update(rawDt) {
   if (L.time > 0) {
     L.spawnT -= dt;
     if (L.spawnT <= 0) {
-      const per = 1 + Math.floor(Math.max(0, G.level - 19) / 8);
+      const over20 = Math.max(0, G.level - 20);
+      const per = over20 > 0 ? 1 + Math.floor((over20 + 2) / 3) : 1 + Math.floor(Math.max(0, G.level - 19) / 8);
       for (let i = 0; i < per; i++) spawnWave();
-      const base = Math.max(0.45, 1.7 * Math.pow(0.92, G.level - 1));
-      L.spawnT = base * (1 - 0.3 * L.elapsed / LEVEL_TIME) * rand(0.8, 1.2) * (L.boss ? 1.8 : 1) / ENEMY_COUNT_MUL;
+      const base = over20 > 0
+        ? Math.max(0.26, 0.44 * Math.pow(0.95, over20))
+        : Math.max(0.45, 1.7 * Math.pow(0.92, G.level - 1));
+      L.spawnT = base * (1 - 0.3 * L.elapsed / LEVEL_TIME) * rand(0.8, 1.2) * (L.boss ? (over20 > 0 ? 1.35 : 1.8) : 1) / enemyCountMulFor(G.level);
     }
   }
-  // 头目在关卡的最后出现（倒计时剩余 3 秒内登场，且血量翻倍）
+  // 头目在关卡的最后出现（倒计时剩余 3 秒内登场，先播放入场聚光灯与横幅过场，再进入答题）
   if (L.isBoss && !L.bossSpawned && L.time <= 3) {
     L.bossSpawned = true;
     L.boss = spawnEnemy('boss');
-    L.shake = 0.4; sfx.boss();
-    L.notice = { text: `关底头目登场：${L.boss.kind.name}（${L.boss.kind.tip}）`, t: 3.8 };
-    openQuiz(`${L.boss.kind.name}在关卡最后出现了！`);
+    startBossIntro(L.boss);
     return;
   }
   if (L.boss && !L.bossHalfAsked && L.boss.hp < L.boss.maxHp / 2) {
     L.bossHalfAsked = true;
     sfx.roar();
-    openQuiz(`${L.boss.kind.name}发怒了！`);
+    openQuiz(`${bossLabel(L.boss.kind, G.level)}发怒了！`);
     return;
   }
 
@@ -2791,18 +3136,32 @@ function coneFill(o, a, len, fill, stroke, hs = 1) {
   ctx.closePath(); ctx.fillStyle = fill; ctx.fill();
   if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = 2; ctx.stroke(); }
 }
-function drawDragonTelegraph(e) {
+function drawFallingHazards(e) {
+  if (!e.meteors || !e.meteors.length) return;
   ctx.lineWidth = 2;
   for (const m of e.meteors) {
     const p = clamp(m.t / m.delay, 0, 1);
-    ell(m.x, m.y, 74, 74, `rgba(230,60,40,${0.1 + 0.2 * p})`, 'rgba(230,60,40,.7)');
-    ell(m.x, m.y, 74 * p, 74 * p, `rgba(255,120,40,${0.2 + 0.3 * p})`);
-    if (p > 0.35) {
-      const q = (p - 0.35) / 0.65, fy = m.y - (1 - q) * 320, fx = m.x - (1 - q) * 70;
-      for (let k = 3; k >= 1; k--) ell(fx + k * 7, fy - k * 14, 12 - k * 2, 12 - k * 2, 'rgba(255,' + (120 + k * 30) + ',60,.35)');
-      ell(fx, fy, 14, 14, '#ff9a3c', OUT); ell(fx - 3, fy - 3, 6, 6, '#ffe066');
+    const rad = m.rad || 74;
+    if (m.rock) {
+      ell(m.x, m.y, rad, rad, `rgba(185,120,55,${0.12 + 0.22 * p})`, 'rgba(215,140,60,.78)');
+      ell(m.x, m.y, rad * p, rad * p, `rgba(210,145,75,${0.2 + 0.28 * p})`);
+      if (p > 0.28) {
+        const q = (p - 0.28) / 0.72, fy = m.y - (1 - q) * 300, fx = m.x - (1 - q) * 35;
+        ell(fx, fy, 18, 15, '#7c6b5c', OUT);
+        ell(fx - 5, fy - 4, 7, 5, '#b8a898');
+      }
+    } else {
+      ell(m.x, m.y, rad, rad, `rgba(230,60,40,${0.1 + 0.2 * p})`, 'rgba(230,60,40,.7)');
+      ell(m.x, m.y, rad * p, rad * p, `rgba(255,120,40,${0.2 + 0.3 * p})`);
+      if (p > 0.35) {
+        const q = (p - 0.35) / 0.65, fy = m.y - (1 - q) * 320, fx = m.x - (1 - q) * 70;
+        for (let k = 3; k >= 1; k--) ell(fx + k * 7, fy - k * 14, 12 - k * 2, 12 - k * 2, 'rgba(255,' + (120 + k * 30) + ',60,.35)');
+        ell(fx, fy, 14, 14, '#ff9a3c', OUT); ell(fx - 3, fy - 3, 6, 6, '#ffe066');
+      }
     }
   }
+}
+function drawDragonTelegraph(e) {
   if (e.sub === 'breath' && (e.st === 'wind' || e.st === 'act')) {
     const o = dragonMouth(e);
     if (e.st === 'wind') {
@@ -2816,17 +3175,40 @@ function drawDragonTelegraph(e) {
     }
   }
 }
+function drawPhoenixTelegraph(e) {
+  if (e.st !== 'wind') return;
+  const wp = 1 - e.stT / e.stDur;
+  const fill = `rgba(255,110,40,${0.12 + 0.24 * wp})`, edge = 'rgba(255,150,45,.8)';
+  ctx.lineWidth = 2;
+  if (e.sub === 'dive') {
+    ctx.save(); ctx.translate(e.x, e.y); ctx.rotate(e.dir);
+    ctx.fillStyle = fill; ctx.strokeStyle = edge;
+    ctx.beginPath(); ctx.roundRect(0, -e.r * 0.78, 660, e.r * 1.56, 14); ctx.fill(); ctx.stroke();
+    ctx.restore();
+  } else {
+    ell(e.x, e.y, 150 + wp * 40, 150 + wp * 40, fill, edge);
+  }
+}
 function drawTelegraph(e) {
   if (e.type !== 'boss') return;
+  drawFallingHazards(e);
   if (e.kind.special === 'dragon') return drawDragonTelegraph(e);
+  if (e.kind.special === 'phoenix') return drawPhoenixTelegraph(e);
   if (e.st !== 'wind' && e.st !== 'act') return;
   const sp = e.kind.special, wp = e.st === 'wind' ? 1 - e.stT / e.stDur : 1;
   const fill = `rgba(230,60,40,${0.12 + 0.22 * wp})`, edge = 'rgba(230,60,40,.7)';
   ctx.lineWidth = 2;
-  if (e.st === 'wind' && (sp === 'stomp' || sp === 'roar')) ell(e.x, e.y, sp === 'stomp' ? 210 : 290, sp === 'stomp' ? 210 : 290, fill, edge);
-  else if (sp === 'pounce') ell(e.tx, e.ty, 85, 85, fill, edge);
-  else if (e.st === 'wind' && (sp === 'charge' || sp === 'dash')) {
-    const len = sp === 'charge' ? 700 : 260;
+  if (e.st === 'wind' && (sp === 'stomp' || sp === 'roar')) {
+    const rad = sp === 'stomp' ? 210 + Math.round(Math.max(0, e.r - 52) * 0.8) : 290 + Math.round(Math.max(0, e.r - 44) * 0.8);
+    ell(e.x, e.y, rad, rad, fill, edge);
+  } else if (e.st === 'wind' && sp === 'quake') {
+    const rad = 285 + Math.round(Math.max(0, e.r - 55) * 0.7);
+    ell(e.x, e.y, rad, rad, `rgba(75,195,255,${0.12 + 0.22 * wp})`, 'rgba(110,225,255,.85)');
+  } else if (sp === 'pounce') {
+    const landR = 85 + Math.max(0, e.r - 40) * 0.6;
+    ell(e.tx, e.ty, landR, landR, fill, edge);
+  } else if (e.st === 'wind' && (sp === 'charge' || sp === 'dash' || sp === 'snap')) {
+    const len = sp === 'charge' ? 700 : sp === 'snap' ? 280 : 260;
     ctx.save(); ctx.translate(e.x, e.y); ctx.rotate(e.dir);
     ctx.fillStyle = fill; ctx.strokeStyle = edge;
     ctx.beginPath(); ctx.roundRect(0, -e.r * 0.8, len, e.r * 1.6, 12); ctx.fill(); ctx.stroke();
@@ -2842,21 +3224,32 @@ function drawBossBody(e, fl) {
   if (wind) {
     if (sp === 'bark') { pose.headRot = -0.45 * wp; pose.mouth = wp > 0.6 ? 1 : 0; }
     else if (sp === 'dash' || sp === 'pounce') { crouch = wp; shake = 1.5; }
+    else if (sp === 'snap') { crouch = wp * 0.8; pose.mouth = wp; shake = 1.8; }
     else if (sp === 'howl') { pose.headRot = -0.75 * wp; pose.mouth = wp; }
-    else if (sp === 'stomp') { rear = wp; pose.trunkUp = wp; }
+    else if (sp === 'stomp' || sp === 'quake') { rear = wp; pose.trunkUp = wp; shake = sp === 'quake' ? 2.2 : 0; }
+    else if (sp === 'boulder') { pose.puff = wp; pose.mouth = wp; shake = 2.4; }
+    else if (sp === 'venom') { pose.puff = wp; pose.mouth = wp; }
+    else if (sp === 'sting') { pose.trunkUp = wp; crouch = wp * 0.4; shake = 1.5; }
     else if (sp === 'spit') { pose.lean = wp; pose.mouth = wp; }
     else if (sp === 'roar') { pose.mouth = 1; pose.puff = wp; shake = 2.5; pose.headRot = -0.2; }
     else if (sp === 'charge') { pose.headRot = 0.3 * wp; crouch = 0.3 * wp; shake = 2; }
   } else if (act) {
-    if (sp === 'dash' || sp === 'charge') { stretch = 1; tilt = 0.1; pose.walk = true; pose.t = e.t * 3; pose.headRot = sp === 'charge' ? 0.3 : 0; }
+    if (sp === 'dash' || sp === 'charge' || sp === 'snap') { stretch = 1; tilt = 0.1; pose.walk = true; pose.t = e.t * 3; pose.headRot = sp === 'charge' ? 0.3 : 0; pose.mouth = sp === 'snap' ? 1 : 0; }
     else if (sp === 'pounce') { pose.mouth = 1; tilt = -0.25 + 0.5 * (1 - e.stT / e.stDur); }
-  } else if (e.st === 'rest' && (sp === 'roar' || sp === 'bark' || sp === 'howl')) { pose.mouth = 1; pose.puff = 1; if (sp === 'howl') pose.headRot = -0.75; }
+    else if (sp === 'sting') { pose.trunkUp = 1; }
+    else if (sp === 'quake') { crouch = 0.35; pose.trunkUp = 0.4; shake = 2; }
+  } else if (e.st === 'rest' && (sp === 'roar' || sp === 'bark' || sp === 'howl' || sp === 'venom')) { pose.mouth = 1; pose.puff = 1; if (sp === 'howl') pose.headRot = -0.75; }
   if (sp === 'dragon') {
     const br = e.sub === 'breath';
     pose.mouth = e.st === 'act' && br ? 1 : e.st === 'wind' && br ? wp : lunge;
     if (e.st === 'wind') pose.wing = -0.55 - 0.2 * wp;
     else if (e.st === 'act' && br) pose.wing = -0.35 + Math.sin(e.t * 8) * 0.08;
     pose.headRot = e.st === 'wind' && br ? -0.2 * wp : 0;
+  } else if (sp === 'phoenix') {
+    pose.mouth = e.st === 'wind' || e.st === 'act' ? 1 : lunge;
+    if (e.st === 'wind') { pose.wing = -0.6 - 0.25 * wp; shake = 2; }
+    else if (e.st === 'act' && e.sub === 'dive') { pose.wing = -0.75; stretch = 1; tilt = 0.15; }
+    else if (e.st === 'act') { pose.wing = Math.sin(e.t * 18) * 0.7; }
   }
   const k = e.r / 40;
   ctx.translate(lunge * 16 + (shake ? rand(-shake, shake) : 0), -e.z - rear * 22 + crouch * 7);
@@ -2905,7 +3298,7 @@ const ctxTinted = new Proxy(ctxReal, {
   },
   set(_t, k, v) { ctxBase[k] = (k === 'fillStyle' || k === 'strokeStyle') && tintRgb ? tintColor(v) : v; return true; },
 });
-const HIT_SZ = 320, HIT_HALF = HIT_SZ / 2;
+const HIT_SZ = 560, HIT_HALF = HIT_SZ / 2;
 const hitCanvas = document.createElement('canvas');
 hitCanvas.width = HIT_SZ * 2;
 hitCanvas.height = HIT_SZ * 2;
@@ -3065,6 +3458,12 @@ function drawEnemyBody(e) {
 function drawEnemy(e) {
   const r = e.r, T = ETIERS[e.tier || 0];
   ell(e.x, e.y + r * 0.9, r * 0.9, r * 0.3, 'rgba(0,0,0,.18)');
+  if (e.type === 'boss' && G.level > 20) {
+    const ga = ctx.globalAlpha;
+    ctx.globalAlpha = ga * (0.24 + 0.1 * Math.sin(performance.now() / 160));
+    ell(e.x, e.y + r * 0.85, r * 1.38, r * 0.48, G.level >= 30 ? '#ff3b7a' : '#ff6b3c');
+    ctx.globalAlpha = ga;
+  }
   if (e.tier >= 2) {
     const ga = ctx.globalAlpha; ctx.globalAlpha = ga * (0.22 + 0.08 * Math.sin(performance.now() / 180 + e.seed));
     ell(e.x, e.y + r * 0.25, r * 1.45, r * 1.2, T.tint); ctx.globalAlpha = ga;
@@ -3076,7 +3475,9 @@ function drawEnemy(e) {
   }
   if (e.flash > 0) {
     const flashAmt = clamp(e.flash / 0.12, 0, 1);
-    const pad = e.type === 'boss' ? HIT_SZ : e.type === 'snake' ? Math.min(HIT_SZ, Math.ceil(r * 9.5 + 32)) : Math.min(HIT_SZ, Math.ceil(r * 3.8 + 44));
+    const pad = e.type === 'boss'
+      ? Math.min(HIT_SZ, Math.ceil(r * 5.2 + 70))
+      : e.type === 'snake' ? Math.min(HIT_SZ, Math.ceil(r * 9.5 + 32)) : Math.min(HIT_SZ, Math.ceil(r * 3.8 + 44));
     const box = Math.max(64, pad + (pad & 1));
     const half = box / 2;
     hitCtx.setTransform(2, 0, 0, 2, 0, 0);
@@ -3119,15 +3520,18 @@ function drawEnemy(e) {
   const big = e.type === 'boss' || e.type === 'elite';
   let top = e.y - r - 14;
   if (e.hp < e.maxHp || big || e.tier > 0) {
-    const bw = e.type === 'boss' ? 104 : e.type === 'elite' ? 60 : Math.max(r * 2.1, 30);
-    const bh = e.type === 'boss' ? 8 : e.type === 'elite' ? 6.5 : 5.5;
+    const bw = e.type === 'boss' ? Math.max(108, Math.round(r * 2.15)) : e.type === 'elite' ? 60 : Math.max(r * 2.1, 30);
+    const bh = e.type === 'boss' ? (G.level > 20 ? 10 : 8) : e.type === 'elite' ? 6.5 : 5.5;
     const hitPop = e.flash > 0 ? -Math.sin(clamp(e.flash / 0.12, 0, 1) * Math.PI) * 2.5 : 0;
-    const by = e.y - (e.z || 0) - (e.type === 'boss' ? (e.kind.barY || r + 34) : r + (e.type === 'elite' ? 26 : 15)) + hitPop;
+    const bossBarOff = e.type === 'boss'
+      ? Math.round((e.kind.barY || (e.kind.r + 34)) * (e.sizeMul || 1))
+      : r + (e.type === 'elite' ? 26 : 15);
+    const by = e.y - (e.z || 0) - bossBarOff + hitPop;
     const bx = e.x - bw / 2;
     const hpPct = clamp(e.hp / e.maxHp, 0, 1);
     const trailPct = clamp((e.hpTrail !== undefined ? e.hpTrail : e.hp) / e.maxHp, hpPct, 1);
     top = by;
-    if (e.type === 'boss') outlined(e.kind.name, e.x, by - 13, 14, hpPct < 0.5 ? '#ff9a8a' : '#fff');
+    if (e.type === 'boss') outlined(bossLabel(e.kind, G.level), e.x, by - 14, G.level > 20 ? 16 : 14, hpPct < 0.5 ? '#ff9a8a' : G.level > 20 ? '#ffe066' : '#fff');
 
     ctx.save();
     ctx.fillStyle = OUT;
@@ -3617,8 +4021,11 @@ function drawHUD() {
 
   if (L.banner > 0 && state !== 'clear') {
     ctx.globalAlpha = clamp(L.banner, 0, 1);
-    outlined(`第 ${G.level} 关`, W / 2, H * 0.3, 46, '#ffe066');
-    outlined(L.isBoss ? '头目关！头目将在关卡最后登场' : '保卫猫窝！', W / 2, H * 0.3 + 44, 20);
+    outlined(`第 ${G.level} 关`, W / 2, H * 0.3, 46, G.level > 20 ? '#ff8b6b' : '#ffe066');
+    const sub = L.isBoss
+      ? (G.level > 20 ? '高难头目关！巨型头目将在关卡最后登场' : '头目关！头目将在关卡最后登场')
+      : (G.level > 20 ? '高难挑战！强敌汹涌来袭，全力保卫猫窝！' : '保卫猫窝！');
+    outlined(sub, W / 2, H * 0.3 + 44, 20, G.level > 20 ? '#ffd7a8' : '#fff');
     ctx.globalAlpha = 1;
   }
   const effScale = scale * camZoom;
@@ -3628,7 +4035,7 @@ function drawHUD() {
     if (sx < 0 || sx > W || sy < 0 || sy > H) {
       const a = Math.atan2(sy - H / 2, sx - W / 2);
       const px = clamp(W / 2 + Math.cos(a) * W, 36, W - 36), py = clamp(H / 2 + Math.sin(a) * H, 90, H - 30);
-      outlined(e.type === 'boss' ? e.kind.name : '小头目', px, py, 15, '#ff9a8a');
+      outlined(e.type === 'boss' ? bossLabel(e.kind, G.level) : '小头目', px, py, 15, '#ff9a8a');
     }
   }
   if (L.notice) {
@@ -3671,24 +4078,187 @@ function drawHUD() {
   }
 }
 
+function drawBossIntro(effScale) {
+  const bi = L && L.bossIntro;
+  if (!bi || !bi.boss || state !== 'playing') return;
+  const b = bi.boss;
+  const fadeIn = smoothstep(bi.t / 0.28);
+  const fadeOut = 1 - smoothstep((bi.t - (bi.dur - 0.36)) / 0.36);
+  const alpha = fadeIn * fadeOut;
+  if (alpha <= 0.01) return;
+
+  const bx = (b.x - cam.x) * effScale;
+  const by = (b.y - cam.y - (b.z || 0) * 0.7) * effScale;
+  const groundY = (b.y - cam.y + b.r * 0.62) * effScale;
+
+  // 1. 聚光灯压暗遮罩 + 光圈聚焦（单次径向渐变，手机端极低开销）
+  const tighten = 1 + 0.72 * (1 - smoothstep(bi.t / 0.48));
+  const spotR = Math.max(88, b.r * 2.15 * effScale) * tighten;
+  const outerR = Math.max(spotR * 2.25, Math.hypot(W, H) * 0.68);
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  const spotGrad = ctx.createRadialGradient(bx, by, spotR * 0.12, bx, by, outerR);
+  spotGrad.addColorStop(0, 'rgba(255, 246, 205, 0.12)');
+  spotGrad.addColorStop(Math.min(0.45, (spotR * 0.72) / outerR), 'rgba(255, 238, 175, 0.03)');
+  spotGrad.addColorStop(Math.min(0.75, (spotR * 1.15) / outerR), 'rgba(10, 6, 18, 0.62)');
+  spotGrad.addColorStop(1, 'rgba(6, 4, 14, 0.8)');
+  ctx.fillStyle = spotGrad;
+  ctx.fillRect(0, 0, W, H);
+
+  // 2. 顶部舞台聚光灯光束（柔和的锥形暖光洒落在 Boss 身上）
+  const beamTopX = bx + (W * 0.5 - bx) * 0.18;
+  const beamTopW = Math.max(26, spotR * 0.24);
+  const beamBotW = spotR * 1.05;
+  const beamGrad = ctx.createLinearGradient(beamTopX, 0, bx, groundY + spotR * 0.25);
+  beamGrad.addColorStop(0, bi.isApex ? 'rgba(255, 195, 110, 0.30)' : 'rgba(255, 244, 196, 0.26)');
+  beamGrad.addColorStop(0.65, bi.isApex ? 'rgba(255, 150, 75, 0.12)' : 'rgba(255, 232, 150, 0.10)');
+  beamGrad.addColorStop(1, 'rgba(255, 224, 120, 0)');
+  ctx.fillStyle = beamGrad;
+  ctx.beginPath();
+  ctx.moveTo(beamTopX - beamTopW, 0);
+  ctx.lineTo(beamTopX + beamTopW, 0);
+  ctx.lineTo(bx + beamBotW, groundY + spotR * 0.2);
+  ctx.lineTo(bx - beamBotW, groundY + spotR * 0.2);
+  ctx.closePath();
+  ctx.fill();
+
+  // 脚下聚光灯亮斑与脉冲外环
+  const pulse = 0.88 + 0.12 * Math.sin(bi.t * 14);
+  const ringCol = bi.isApex ? '#ff9442' : bi.isMega ? '#ff6b8a' : '#ffe066';
+  ctx.save();
+  ctx.globalAlpha = alpha * 0.35 * pulse;
+  ell(bx, groundY, spotR * 0.72, spotR * 0.28, '#fff4c2');
+  ctx.globalAlpha = alpha * 0.75 * pulse;
+  ctx.strokeStyle = ringCol;
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.ellipse(bx, groundY, spotR * 0.76, spotR * 0.3, 0, 0, TAU);
+  ctx.stroke();
+  ctx.restore();
+
+  // 3. 轻薄电影感上下黑边
+  const barH = Math.round(clamp(H * 0.042, 14, 28) * alpha);
+  ctx.fillStyle = 'rgba(10, 6, 16, 0.88)';
+  ctx.fillRect(0, 0, W, barH);
+  ctx.fillRect(0, H - barH, W, barH);
+
+  // 4. 屏幕上方“BOSS来袭”横幅（从上方弹出，带警示斜纹与 Boss 名称）
+  const narrow = W < 540;
+  const slideIn = smoothstep(bi.t / 0.3);
+  const slideOut = 1 - smoothstep((bi.t - (bi.dur - 0.34)) / 0.34);
+  const slide = slideIn * slideOut;
+  const banW = Math.min(W - 18, narrow ? 440 : 660);
+  const banH = narrow ? 84 : 98;
+  const targetY = barH + (narrow ? 12 : 16);
+  const banX = (W - banW) / 2;
+  const banY = -banH - 12 + (targetY + banH + 12) * slide;
+
+  ctx.save();
+  ctx.globalAlpha = clamp(slide * 1.15, 0, 1);
+
+  // 外层发光阴影背板
+  ctx.fillStyle = bi.isApex ? 'rgba(255, 92, 36, 0.32)' : 'rgba(235, 42, 68, 0.28)';
+  ctx.beginPath(); ctx.roundRect(banX - 5, banY - 5, banW + 10, banH + 10, 16);
+  ctx.fill();
+
+  // 主横幅背景（深绯红渐变）
+  const bg = ctx.createLinearGradient(banX, banY, banX + banW, banY + banH);
+  if (bi.isApex) {
+    bg.addColorStop(0, '#3a0b06');
+    bg.addColorStop(0.5, '#991b0c');
+    bg.addColorStop(1, '#3a0b06');
+  } else {
+    bg.addColorStop(0, '#2a0814');
+    bg.addColorStop(0.5, '#8c1028');
+    bg.addColorStop(1, '#2a0814');
+  }
+  ctx.beginPath(); ctx.roundRect(banX, banY, banW, banH, 13);
+  ctx.fillStyle = bg;
+  ctx.fill();
+
+  // 上下滚动警示斜纹条
+  const stripeH = narrow ? 9 : 11;
+  ctx.save();
+  ctx.beginPath(); ctx.roundRect(banX, banY, banW, banH, 13);
+  ctx.clip();
+  const drawStripes = sy => {
+    ctx.fillStyle = '#1d1016';
+    ctx.fillRect(banX, sy, banW, stripeH);
+    ctx.fillStyle = bi.isApex ? '#ff9d2e' : '#ffd24a';
+    const step = 28;
+    const off = (bi.t * 95) % step;
+    for (let x = banX - step + off; x < banX + banW + step; x += step) {
+      ctx.beginPath();
+      ctx.moveTo(x, sy);
+      ctx.lineTo(x + 13, sy);
+      ctx.lineTo(x + 6, sy + stripeH);
+      ctx.lineTo(x - 7, sy + stripeH);
+      ctx.closePath();
+      ctx.fill();
+    }
+  };
+  drawStripes(banY);
+  drawStripes(banY + banH - stripeH);
+
+  // 横幅中央暖金高光扫光
+  const sheen = ctx.createRadialGradient(W / 2, banY + banH * 0.5, 10, W / 2, banY + banH * 0.5, banW * 0.45);
+  sheen.addColorStop(0, 'rgba(255, 224, 110, 0.24)');
+  sheen.addColorStop(1, 'rgba(255, 224, 110, 0)');
+  ctx.fillStyle = sheen;
+  ctx.fillRect(banX, banY + stripeH, banW, banH - stripeH * 2);
+  ctx.restore();
+
+  // 粗金红描边边框
+  ctx.beginPath(); ctx.roundRect(banX, banY, banW, banH, 13);
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = bi.isApex ? '#ffb648' : '#ffe066';
+  ctx.stroke();
+
+  // 主标题：“BOSS来袭”（弹出弹性缩放 + 轻微警报脉动）
+  const pop = bi.t < 0.35
+    ? 0.72 + 0.28 * slideIn + 0.16 * Math.sin(clamp(bi.t / 0.35, 0, 1) * Math.PI)
+    : 1 + 0.025 * Math.sin(bi.t * 12);
+  const titleY = banY + stripeH + (narrow ? 23 : 27);
+  ctx.save();
+  ctx.translate(W / 2, titleY);
+  ctx.scale(pop, pop);
+  outlined('⚠  BOSS来袭  ⚠', 0, 0, narrow ? 25 : 32, '#ffe56b');
+  ctx.restore();
+
+  // 副标题：Boss 名称 + 称号标签 + 特性简介
+  const tag = bi.isApex ? '终极头目' : G.level >= 30 ? '深渊巨兽' : bi.isMega ? '巨型头目' : '关底头目';
+  const subText = `[${tag}] ${bi.name}${bi.tip ? ' · ' + bi.tip : ''}`;
+  const subSize = narrow ? 13 : 16;
+  ctx.font = `bold ${subSize}px "PingFang SC","Microsoft YaHei",sans-serif`;
+  const maxSubW = banW - 34;
+  const sw = ctx.measureText(subText).width;
+  const fitSize = sw > maxSubW ? Math.max(11, Math.floor(subSize * maxSubW / sw)) : subSize;
+  outlined(subText, W / 2, banY + banH - stripeH - (narrow ? 15 : 18), fitSize, '#fff3d4');
+
+  ctx.restore();
+  ctx.restore();
+}
+
 function render() {
   const dpr = canvas._dpr;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   const effScale = scale * camZoom;
   const vw = W / effScale, vh = H / effScale;
-  const focus = L ? L.cat : NEST;
+  let focus = L ? L.cat : NEST;
+  if (L && L.bossIntro && L.bossIntro.boss) {
+    const w = bossIntroCamWeight(L.bossIntro);
+    const b = L.bossIntro.boss;
+    // 聚焦 Boss 时镜头微微上移，为屏幕上方“BOSS来袭”横幅和顶部聚光灯光束留出空间
+    focus = {
+      x: L.cat.x + (b.x - L.cat.x) * w,
+      y: L.cat.y + ((b.y - 36) - L.cat.y) * w,
+    };
+  }
   cam.x = vw >= WORLD.w ? (WORLD.w - vw) / 2 : clamp(focus.x - vw / 2, 0, WORLD.w - vw);
   cam.y = vh >= WORLD.h ? (WORLD.h - vh) / 2 : clamp(focus.y - vh / 2, 0, WORLD.h - vh);
   let shx = 0, shy = 0;
-  if (L && state === 'playing') {
-    if (L.shake > 0) {
-      const amp = L.combo >= 30 ? 6.5 : L.combo >= 20 ? 5.2 : 4;
-      shx += rand(-amp, amp); shy += rand(-amp, amp);
-    }
-    if (L.combo >= 20) {
-      const hum = L.combo >= 30 ? 1.8 : 1.1;
-      shx += rand(-hum, hum); shy += rand(-hum, hum);
-    }
+  if (L && state === 'playing' && L.shake > 0) {
+    shx = rand(-4, 4); shy = rand(-4, 4);
   }
   ctx.save();
   ctx.scale(effScale, effScale); ctx.translate(-cam.x + shx, -cam.y + shy);
@@ -3719,7 +4289,16 @@ function render() {
   ctx.lineWidth = 2;
   for (const b of L.ebullets) {
     if (b.leaf) { ctx.save(); ctx.translate(b.x, b.y); ctx.rotate(Math.atan2(b.vy, b.vx)); ell(0, 0, 10, 5, '#5fc23f', OUT); ctx.restore(); }
-    else { ell(b.x, b.y, b.r, b.r, b.col || '#5b4a6b', OUT); ell(b.x - 1.5, b.y - 1.5, 2, 2, b.col ? '#e8ffd8' : '#b8a8c8'); }
+    else if (b.feather) {
+      ctx.save(); ctx.translate(b.x, b.y); ctx.rotate(Math.atan2(b.vy, b.vx));
+      polyFill([-12, 0, -2, -5, 13, 0, -2, 5], '#ff7a2b');
+      ell(1, 0, 5, 2, '#ffe066');
+      ctx.restore();
+    } else if (b.stinger) {
+      ctx.save(); ctx.translate(b.x, b.y); ctx.rotate(Math.atan2(b.vy, b.vx));
+      polyFill([-9, -4, 12, 0, -9, 4, -5, 0], '#ff48b0');
+      ctx.restore();
+    } else { ell(b.x, b.y, b.r, b.r, b.col || '#5b4a6b', OUT); ell(b.x - 1.5, b.y - 1.5, 2, 2, b.col ? '#e8ffd8' : '#b8a8c8'); }
   }
   for (const p of L.parts) {
     if (p.color === 'boom') {
@@ -3754,7 +4333,11 @@ function render() {
   for (const t of L.texts) { ctx.globalAlpha = clamp(t.life * 2, 0, 1); outlined(t.text, t.x, t.y, t.size, t.color); }
   ctx.globalAlpha = 1;
   ctx.restore();
-  drawHUD();
+  if (L && L.bossIntro && state === 'playing') {
+    drawBossIntro(effScale);
+  } else {
+    drawHUD();
+  }
 }
 
 // ---------- 主循环 ----------
@@ -3773,5 +4356,5 @@ setState('menu');
 requestAnimationFrame(frame);
 
 // 调试接口
-window.__cat = { get G() { return G; }, get L() { return L; }, get state() { return state; }, get exam() { return exam; }, set auto(v) { touchMode = v; }, update, startLevel, applyBuff, levelClear, rateLevel, weaponStats, mergeAll, ilv, spawnEnemy, useShockwave, triggerRedRage, openReviveExam, showUnlock, makeMiniQuestion, shopAction, openShop, makeExamQuestion, openQuiz, openMini, get mini() { return mini; }, get quiz() { return quiz; } };
+window.__cat = { get G() { return G; }, get L() { return L; }, get state() { return state; }, get exam() { return exam; }, set auto(v) { touchMode = v; }, update, startLevel, applyBuff, levelClear, rateLevel, weaponStats, mergeAll, ilv, spawnEnemy, startBossIntro, useShockwave, triggerRedRage, openReviveExam, showUnlock, makeMiniQuestion, shopAction, openShop, makeExamQuestion, openQuiz, openMini, get mini() { return mini; }, get quiz() { return quiz; } };
 })();

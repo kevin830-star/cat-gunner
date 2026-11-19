@@ -120,6 +120,13 @@ const SFX = (() => {
     nestHit: [150, () => { tone(115, 0.13, { to: 65, vol: 0.12 }); noise(0.07, { freq: 500, vol: 0.16 }); }],
     // 头目
     boss: [0, () => { tone(70, 0.75, { type: 'sawtooth', to: 115, vol: 0.3 }); noise(0.6, { freq: 320, vol: 0.28 }); }],
+    bossIntro: [0, () => {
+      tone(95, 0.55, { type: 'sine', to: 36, vol: 0.52 });
+      tone(340, 0.24, { type: 'sawtooth', to: 240, vol: 0.16 });
+      tone(340, 0.24, { type: 'sawtooth', to: 240, vol: 0.16, delay: 0.32 });
+      tone(140, 0.85, { type: 'triangle', to: 72, vol: 0.22, delay: 0.18 });
+      noise(0.5, { freq: 1800, to: 420, type: 'bandpass', q: 1.4, vol: 0.2, delay: 0.08 });
+    }],
     roar: [0, () => { tone(115, 0.85, { type: 'sawtooth', to: 68, vol: 0.34 }); tone(172, 0.85, { type: 'sawtooth', to: 98, vol: 0.2 }); noise(0.85, { freq: 800, to: 300, vol: 0.32 }); }],
     howl: [0, () => { tone(340, 0.5, { type: 'sine', to: 640, vol: 0.24 }); tone(640, 0.7, { type: 'sine', to: 300, vol: 0.24, delay: 0.5 }); }],
     trumpet: [0, () => { tone(310, 0.45, { type: 'sawtooth', to: 540, vol: 0.2 }); tone(465, 0.45, { to: 800, vol: 0.06 }); }],
