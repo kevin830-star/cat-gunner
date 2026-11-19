@@ -13,7 +13,7 @@ import {
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
-const PORT = Number(process.env.PORT) || 3000;
+const PORT = 3000;
 const HOST = '0.0.0.0';
 
 app.use(express.json({ limit: '16kb' }));
@@ -31,30 +31,46 @@ for (const dir of [VOICES_DIR, DISK_CACHE_DIR]) {
   }
 }
 
-const ALL_VOICE_PHRASES = collectAllVoicePhrases(__dirname);
+let ALL_VOICE_PHRASES = [];
+try {
+  ALL_VOICE_PHRASES = collectAllVoicePhrases(__dirname);
+} catch (err) {
+  console.warn('[Voices] Failed to collect voice phrases:', err?.message || err);
+}
 const manifest = { voice: VOICE_NAME, style: DEFAULT_STYLE, phrases: {} };
 
 function syncManifestFromDisk() {
+  let changed = false;
   try {
     if (fs.existsSync(MANIFEST_PATH)) {
       const parsed = JSON.parse(fs.readFileSync(MANIFEST_PATH, 'utf8'));
       if (parsed && typeof parsed.phrases === 'object') {
         Object.assign(manifest.phrases, parsed.phrases);
       }
+    } else {
+      changed = true;
     }
   } catch {
-    // Ignore malformed manifest
+    changed = true;
   }
   for (const text of ALL_VOICE_PHRASES) {
     const file = phraseFilename(text);
     const full = path.join(VOICES_DIR, file);
-    if (fs.existsSync(full) && fs.statSync(full).size > 44) {
-      manifest.phrases[text] = file;
-    } else {
-      delete manifest.phrases[text];
+    try {
+      if (fs.existsSync(full) && fs.statSync(full).size > 44) {
+        if (manifest.phrases[text] !== file) {
+          manifest.phrases[text] = file;
+          changed = true;
+        }
+      } else if (text in manifest.phrases) {
+        delete manifest.phrases[text];
+        changed = true;
+      }
+    } catch {
+      // Ignore individual file stat errors
     }
   }
-  saveManifest();
+  if (changed) saveManifest();
 }
 
 function saveManifest() {
@@ -166,6 +182,7 @@ function parseGeminiError(err) {
   let apiStatus = '';
   let rawMessage = String(err?.message || '');
   let retryAfterSeconds = 0;
+  let quotaIds = [];
 
   try {
     const parsed = JSON.parse(rawMessage);
@@ -179,17 +196,30 @@ function parseGeminiError(err) {
         const m = String(d.retryDelay).match(/(\d+)/);
         if (m) retryAfterSeconds = Number(m[1]) || 0;
       }
+      if (Array.isArray(d?.violations)) {
+        for (const v of d.violations) {
+          if (v?.quotaId) quotaIds.push(String(v.quotaId));
+        }
+      }
     }
   } catch {
     // rawMessage is not JSON
   }
+
+  const quotaStr = `${quotaIds.join(',')} ${rawMessage}`;
+  const isDailyQuota = /PerDay|daily/i.test(quotaStr);
 
   if (status === 429 || apiStatus === 'RESOURCE_EXHAUSTED' || rawMessage.includes('RESOURCE_EXHAUSTED')) {
     return {
       status: 429,
       code: 'RESOURCE_EXHAUSTED',
       retryAfterSeconds,
-      message: '今日免费语音额度已用完（429），请在 Settings > Secrets 中切换已启用结算的 API 密钥后重试预生成。',
+      isDailyQuota,
+      quotaIds,
+      detail: rawMessage.slice(0, 240),
+      message: isDailyQuota
+        ? '今日免费语音额度已用完（429），请在 Settings > Secrets 中切换已启用结算的 API 密钥后重试预生成。'
+        : `触发语音接口每分钟速率限制（429），需等待 ${retryAfterSeconds || 60} 秒后继续。`,
     };
   }
   if (status === 403 || apiStatus === 'PERMISSION_DENIED' || rawMessage.includes('API_KEY_INVALID')) {
@@ -197,6 +227,9 @@ function parseGeminiError(err) {
       status: status || 403,
       code: apiStatus || 'PERMISSION_DENIED',
       retryAfterSeconds: 0,
+      isDailyQuota: false,
+      quotaIds,
+      detail: rawMessage.slice(0, 240),
       message: '语音 API 密钥无效或权限不足，请在 Settings > Secrets 中检查并更新 API 密钥。',
     };
   }
@@ -204,6 +237,9 @@ function parseGeminiError(err) {
     status: status >= 400 && status < 600 ? status : 502,
     code: apiStatus || 'TTS_UPSTREAM_ERROR',
     retryAfterSeconds: 0,
+    isDailyQuota: false,
+    quotaIds,
+    detail: rawMessage.slice(0, 240),
     message: rawMessage || '语音合成请求失败，请稍后重试。',
   };
 }
@@ -271,6 +307,9 @@ async function synthesizeAndCache(text, style, { bypassCooldown = false } = {}) 
           wrapped.status = info.status;
           wrapped.code = info.code;
           wrapped.retryAfterSeconds = info.retryAfterSeconds;
+          wrapped.isDailyQuota = info.isDailyQuota;
+          wrapped.quotaIds = info.quotaIds;
+          wrapped.detail = info.detail;
           throw wrapped;
         }
       }
@@ -278,12 +317,18 @@ async function synthesizeAndCache(text, style, { bypassCooldown = false } = {}) 
         status: 429,
         code: 'RESOURCE_EXHAUSTED',
         retryAfterSeconds: lastRetryAfterSeconds || 60,
-        message: '今日免费语音额度已用完（429），请在 Settings > Secrets 中切换已启用结算的 API 密钥后重试预生成。',
+        isDailyQuota: false,
+        quotaIds: [],
+        detail: '',
+        message: '语音接口限流（429），请稍后重试。',
       };
       const wrapped = new Error(info.message);
       wrapped.status = info.status;
       wrapped.code = info.code;
       wrapped.retryAfterSeconds = info.retryAfterSeconds;
+      wrapped.isDailyQuota = info.isDailyQuota;
+      wrapped.quotaIds = info.quotaIds;
+      wrapped.detail = info.detail;
       throw wrapped;
     })().finally(() => {
       ttsInFlight.delete(cacheKey);
@@ -332,6 +377,7 @@ app.post('/api/tts/pregenerate', async (_req, res) => {
     let idx = 0;
 
     async function worker() {
+      let rpmWaitCount = 0;
       while (!errorInfo) {
         const i = idx++;
         if (i >= missing.length) break;
@@ -339,10 +385,23 @@ app.post('/api/tts/pregenerate', async (_req, res) => {
         try {
           const { fromCache } = await synthesizeAndCache(text, DEFAULT_STYLE, { bypassCooldown: i === 0 });
           if (!fromCache) generated++;
+          rpmWaitCount = 0;
         } catch (err) {
+          if (err?.status === 429 && !err?.isDailyQuota && rpmWaitCount < 3) {
+            rpmWaitCount++;
+            const waitSec = Math.min(Math.max(Number(err?.retryAfterSeconds) || 62, 10), 70);
+            console.warn(`[TTS Pregen] RPM limit hit on "${text}", waiting ${waitSec}s (retry ${rpmWaitCount}/3)...`);
+            await new Promise(r => setTimeout(r, waitSec * 1000));
+            modelCooldowns.clear();
+            idx--;
+            continue;
+          }
           errorInfo = {
             status: err?.status || 502,
             code: err?.code || 'TTS_UPSTREAM_ERROR',
+            isDailyQuota: Boolean(err?.isDailyQuota),
+            quotaIds: err?.quotaIds || [],
+            detail: err?.detail || '',
             message: err?.message || '预生成失败',
           };
           break;
@@ -360,6 +419,9 @@ app.post('/api/tts/pregenerate', async (_req, res) => {
           generated,
           done: false,
           code: errorInfo.code,
+          isDailyQuota: errorInfo.isDailyQuota,
+          quotaIds: errorInfo.quotaIds,
+          detail: errorInfo.detail,
           error: errorInfo.message,
         },
       };
@@ -424,6 +486,17 @@ app.use((_req, res) => {
   res.sendFile(path.join(__dirname, 'index.html'));
 });
 
-app.listen(PORT, HOST, () => {
+const server = app.listen(PORT, HOST, () => {
   console.log(`Server listening on http://${HOST}:${PORT}`);
 });
+
+server.on('error', (err) => {
+  console.error('[Server Error]', err);
+  process.exit(1);
+});
+
+for (const sig of ['SIGTERM', 'SIGINT']) {
+  process.on(sig, () => {
+    server.close(() => process.exit(0));
+  });
+}
