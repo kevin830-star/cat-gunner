@@ -56,7 +56,9 @@
     <div class="menu">
       <button class="mbtn adv" data-go="map"><b>🗺️</b><span>冒险地图</span><small>挑战擂台主</small></button>
       <button class="mbtn pets" data-go="pets"><b>🐾</b><span>我的宠物</span><small id="homePetCount"></small></button>
+      <button class="mbtn eggs" data-go="eggs"><b>🥚</b><span>孵蛋屋</span><small id="homeEggCount"></small></button>
       <button class="mbtn shop" data-go="shop"><b>🏪</b><span>道具商店</span><small>药水 · 糖果</small></button>
+      <button class="mbtn gear" data-go="gear"><b>⚒️</b><span>装备工坊</span><small id="homeGearCount"></small></button>
       <button class="mbtn set" data-go="settings"><b>⚙️</b><span>设置</span><small>年级 · 声音</small></button>
     </div>
     <div class="row center">
@@ -78,8 +80,31 @@
     <h3 class="sect">出战队伍（最多 3 只，第一只先上场）</h3>
     <div id="teamSlots" class="teamslots"></div>
     <p class="hint center" id="teamBonus"></p>
-    <h3 class="sect">全部宠物</h3>
+    <h3 class="sect">宠物图鉴 <span id="dexCount"></span></h3>
+    <div id="dex" class="dex"></div>
+    <h3 class="sect">全部宠物 <span id="petCount"></span></h3>
     <div id="petGrid" class="petgrid"></div>
+  </section>
+
+  <!-- 孵蛋屋 -->
+  <section class="screen" id="s-eggs">
+    <div class="topbar"><button class="back" data-go="home">‹</button><h2>孵蛋屋</h2><div class="coins" data-coins></div></div>
+    <p class="hint center">答对 3 题唤醒宠物蛋！孵出相同的宠物可以用来升星 ⭐</p>
+    <div id="eggList" class="egglist"></div>
+  </section>
+
+  <!-- 孵蛋 / 进化舞台 -->
+  <section class="screen" id="s-hatch">
+    <h2 class="title" id="hatchTitle">孵蛋</h2>
+    <div class="hstage"><canvas id="hatchCv"></canvas></div>
+    <div class="hinfo"><div id="hatchProg" class="hprog"></div><div id="hatchMsg"></div><div id="hatchBtns" class="row center"></div></div>
+  </section>
+
+  <!-- 装备工坊 -->
+  <section class="screen" id="s-gear">
+    <div class="topbar"><button class="back" data-go="home">‹</button><h2>装备工坊</h2><div class="coins" data-coins></div></div>
+    <p class="hint center">两件相同等级的装备可以合成高一级 · 在「我的宠物」里给宠物穿上</p>
+    <div id="gearList" class="gearlist"></div>
   </section>
 
   <!-- 商店 -->
@@ -114,16 +139,17 @@
         <button class="btn small ghost" data-act="quitBattle">🏳️ 退出</button>
       </div>
     </div>
-    <!-- 答题 -->
-    <div class="qsheet" id="qsheet">
-      <div class="qhead"><span id="qTag"></span><button class="speak" data-act="repeatSay">🔊</button></div>
-      <div class="qtimer"><i id="qBar"></i></div>
-      <div class="qbody" id="qBody"></div>
-      <div class="qopts" id="qOpts"></div>
-      <div class="qfeed" id="qFeed"></div>
-    </div>
   </section>
 
+</div>
+
+<!-- 答题 -->
+<div class="qsheet" id="qsheet">
+  <div class="qhead"><span id="qTag"></span><button class="speak" data-act="repeatSay">🔊</button></div>
+  <div class="qtimer"><i id="qBar"></i></div>
+  <div class="qbody" id="qBody"></div>
+  <div class="qopts" id="qOpts"></div>
+  <div class="qfeed" id="qFeed"></div>
 </div>
 
 <!-- 弹窗 -->
@@ -137,5 +163,6 @@
 <script src="quiz.js"></script>
 <script src="art.js"></script>
 <script src="game.js"></script>
+<script src="grow.js"></script>
 </body>
 </html>

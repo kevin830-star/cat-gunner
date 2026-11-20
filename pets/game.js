@@ -64,17 +64,27 @@ document.addEventListener('pointerdown', () => SFX.init(), { capture: true });
 
 // 宠物头像图片（缓存成 dataURL）
 const imgCache = {};
-const petImg = (look, px = 96) => imgCache[look + px] || (imgCache[look + px] = PetArt.portrait(look, px).toDataURL());
+const petImg = (look, px = 96, form = 0) => imgCache[look + px + '_' + form] || (imgCache[look + px + '_' + form] = PetArt.portrait(look, px, form).toDataURL());
 
 // ================= 存档 =================
 const KEY = 'petAcademy';
 let store = (() => { try { const d = JSON.parse(localStorage.getItem(KEY)); if (d && Array.isArray(d.profiles)) return d; } catch (e) { /* 坏存档 */ } return { profiles: [], last: null }; })();
 let P = null;   // 当前玩家
+// 第 1 版的存档没有星级、进化、装备、宠物蛋，这里补上
+function normalizeProfile(p) {
+  for (const x of p.pets) { x.star = x.star || 1; x.form = x.form || 0; }
+  p.gear = p.gear || [];
+  p.eggs = Object.assign({ normal: 0, rare: 0 }, p.eggs || {});
+  p.items = Object.assign({ potion: 0, bubble: 0, candy: 0, feather: 0, expCandy: 0 }, p.items || {});
+  p.stats = p.stats || { q: 0, right: 0 };
+  return p;
+}
+store.profiles.forEach(normalizeProfile);
 function save() { try { localStorage.setItem(KEY, JSON.stringify(store)); } catch (e) { /* 隐私模式 */ } }
 function newProfile(name, avatar, gradeZh, gradeMath) {
   const p = {
     id: uid(), name, avatar, gradeZh, gradeMath, coins: 50, pets: [], team: [], starter: null,
-    items: { potion: 2, bubble: 0, candy: 0, feather: 0, expCandy: 0 },
+    items: { potion: 2, bubble: 0, candy: 0, feather: 0, expCandy: 0 }, gear: [], eggs: { normal: 0, rare: 0 },
     stages: {}, badges: [], stats: { q: 0, right: 0 },
     settings: { timer: 'normal', pinyin: gradeZh <= 3, voice: true, sound: true }, created: Date.now(),
   };
@@ -82,7 +92,7 @@ function newProfile(name, avatar, gradeZh, gradeMath) {
   return p;
 }
 function addPet(sp, lv) {
-  const pet = { uid: uid(), sp, lv, exp: 0 };
+  const pet = { uid: uid(), sp, lv, exp: 0, star: 1, form: 0 };
   P.pets.push(pet);
   if (P.team.length < 3) P.team.push(pet.uid);
   return pet;
@@ -97,6 +107,12 @@ function giveExp(pet, n) {
   return { from, to: pet.lv };
 }
 const teamBonus = sps => new Set(sps.map(sp => PETS[sp].sub)).size >= 2;
+const petName = p => formName(p.sp, p.form || 0);
+function gearBonus(id) { const g = { hp: 0, atk: 0, def: 0 }; for (const it of P.gear) if (it.on === id) g[GEAR[it.type].stat] += GEAR_BONUS[it.lv]; return g; }
+const petFull = p => petStats(p.sp, p.lv, { star: p.star, form: p.form, gearBonus: gearBonus(p.uid) });
+const foeForm = lv => (lv >= EVOLVE_LV[1] ? 2 : lv >= EVOLVE_LV[0] ? 1 : 0);   // 对手到了进化等级也会进化
+const starStr = n => '★'.repeat(n || 1);
+const rarityTag = sp => { const r = RARITY[PETS[sp].rarity || 'N']; return `<span class="rar" style="background:${r.color}">${r.name}</span>`; };
 const timerSec = () => (TIMERS.find(t => t.id === P.settings.timer) || TIMERS[1]).sec;
 
 // ================= 界面切换 =================
@@ -119,7 +135,7 @@ RENDER.profiles = () => {
       <div class="av">${p.avatar}</div>
       <div class="info"><b>${esc(p.name)}</b><small>📖 ${GRADES[p.gradeZh - 1]} · 🔢 ${GRADES[p.gradeMath - 1]}</small>
         <small>${p.badges.length ? p.badges.join(' ') : '还没有徽章'} · 🪙 ${p.coins}</small></div>
-      <div class="team">${p.team.map(id => { const pet = p.pets.find(x => x.uid === id); return pet ? `<img src="${petImg(pet.sp, 64)}" width="40" height="40" alt="">` : ''; }).join('')}</div>
+      <div class="team">${p.team.map(id => { const pet = p.pets.find(x => x.uid === id); return pet ? `<img src="${petImg(pet.sp, 64, pet.form)}" width="40" height="40" alt="">` : ''; }).join('')}</div>
     </div>`).join('') + `<div class="pcard add" data-go="newprofile">＋ 新玩家</div>`;
 };
 
@@ -150,10 +166,13 @@ RENDER.home = () => {
   $('#homeHud').innerHTML = `<div class="av">${P.avatar}</div>
     <div class="nm">${esc(P.name)}<small>📖 ${GRADES[P.gradeZh - 1]} · 🔢 ${GRADES[P.gradeMath - 1]} · 已通过 ${done} 关</small></div>
     <div class="coins">🪙 ${P.coins}</div>`;
-  const looks = P.team.map(id => petByUid(id)).filter(Boolean).map(p => p.sp);
-  $('#homeTeam').dataset.looks = looks.join(',');
+  const team = P.team.map(id => petByUid(id)).filter(Boolean);
+  $('#homeTeam').dataset.looks = team.map(p => p.sp).join(',');
+  $('#homeTeam').dataset.forms = team.map(p => p.form || 0).join(',');
   $('#homeBadges').textContent = P.badges.map(b => b.split(' ')[0]).join('');
-  $('#homePetCount').textContent = `${P.pets.length} / ${Object.keys(PETS).length} 只`;
+  $('#homePetCount').textContent = `图鉴 ${new Set(P.pets.map(p => p.sp)).size} / ${Object.keys(PETS).length}`;
+  $('#homeEggCount').textContent = P.eggs.normal + P.eggs.rare ? `有 ${P.eggs.normal + P.eggs.rare} 个蛋待孵化` : 'N · R · SR · SSR';
+  $('#homeGearCount').textContent = `${P.gear.length} 件装备`;
 };
 
 // ---------- 地图 ----------
@@ -213,11 +232,11 @@ function openStage(i) {
   const rewards = [];
   rewards.push(`🪙 ${first ? st.coins : Math.round(st.coins / 3)}`);
   if (first && join && !ownsSpecies(join)) rewards.push(`🐾 ${PETS[join].name}加入`);
-  if (first && st.reward) for (const k in st.reward) rewards.push(`${ITEMS[k].icon} ${ITEMS[k].name} ×${st.reward[k]}`);
+  if (first && st.reward) for (const k in st.reward) rewards.push(rewardText(k, st.reward[k]));
   if (first && st.badge) rewards.push(st.badge);
   modal(`<div class="npc">${st.face}</div><h2>${st.npc}</h2>
     <div class="talk">${st.talk}</div>
-    <div class="foes">${foes.map(([sp, lv]) => `<div><img src="${petImg(sp, 96)}" width="72" height="72" alt=""><br>${PETS[sp].name}<br>Lv.${lv} ${ELEMENTS[PETS[sp].el].icon}</div>`).join('')}</div>
+    <div class="foes">${foes.map(([sp, lv]) => `<div><img src="${petImg(sp, 96, foeForm(lv))}" width="72" height="72" alt=""><br>${formName(sp, foeForm(lv))}<br>Lv.${lv} ${ELEMENTS[PETS[sp].el].icon}</div>`).join('')}</div>
     <p><b>${first ? '首次胜利奖励' : '再次挑战奖励'}：</b>${rewards.join(' · ')}</p>
     <div class="row"><button class="btn ghost" data-act="closeModal">再想想</button><button class="btn big" data-act="pickTeam" data-i="${i}">⚔️ 选择队伍</button></div>`);
 }
@@ -233,49 +252,14 @@ function drawTeamPick(i) {
       const k = teamPick.indexOf(p.uid);
       return `<div class="pet-c ${k >= 0 ? 'on' : ''}" data-act="togglePick" data-uid="${p.uid}" data-i="${i}">
         ${k >= 0 ? `<span class="in">${k + 1}</span>` : ''}<span class="el">${ELEMENTS[PETS[p.sp].el].icon}</span>
-        <img src="${petImg(p.sp, 96)}" style="width:100%" alt=""><b>${PETS[p.sp].name}</b><span class="lv">Lv.${p.lv} ${SUBJECTS[PETS[p.sp].sub].icon}</span></div>`;
+        <img src="${petImg(p.sp, 96, p.form)}" style="width:100%" alt=""><b>${petName(p)}</b><span class="lv">Lv.${p.lv} ${SUBJECTS[PETS[p.sp].sub].icon} <span class="stars">${starStr(p.star)}</span></span></div>`;
     }).join('')}</div>
     <p class="hint">${bonus ? '✅ 中文 + 数学搭配：全队攻击 +10%' : ''}</p>
     <div class="row"><button class="btn ghost" data-act="closeModal">返回</button>
     <button class="btn big" data-act="fight" data-i="${i}" ${teamPick.length ? '' : 'disabled'}>开始对战！</button></div>`);
 }
 
-// ---------- 我的宠物 ----------
-RENDER.pets = () => {
-  const team = P.team.map(id => petByUid(id)).filter(Boolean);
-  $('#teamSlots').innerHTML = [0, 1, 2].map(k => {
-    const p = team[k];
-    return p ? `<div class="slot full" data-act="petInfo" data-uid="${p.uid}"><span class="ord">第 ${k + 1} 位</span><canvas class="pet live" data-look="${p.sp}"></canvas><b>${PETS[p.sp].name}</b></div>`
-      : `<div class="slot">空位<br><small>点下面的宠物加入</small></div>`;
-  }).join('');
-  $('#teamBonus').textContent = teamBonus(team.map(p => p.sp)) ? '✅ 中文 + 数学搭配：全队攻击 +10%' : '💡 同时带上擅长📖中文和🔢数学的宠物，全队攻击 +10%';
-  const owned = P.pets.map(p => {
-    const d = PETS[p.sp], inTeam = P.team.includes(p.uid);
-    return `<div class="pet-c" data-act="petInfo" data-uid="${p.uid}">${inTeam ? '<span class="in">出战</span>' : ''}<span class="el">${ELEMENTS[d.el].icon}</span>
-      <img src="${petImg(p.sp, 96)}" style="width:100%" alt=""><b>${d.name}</b><span class="lv">Lv.${p.lv} · ${SUBJECTS[d.sub].icon}</span>
-      <div class="expbar"><i style="width:${p.lv >= MAX_LEVEL ? 100 : p.exp / expNeed(p.lv) * 100}%"></i></div></div>`;
-  });
-  const missing = Object.keys(PETS).filter(sp => !ownsSpecies(sp)).map(sp => `<div class="pet-c locked"><span class="el">❓</span><img src="${petImg(sp, 96)}" style="width:100%;filter:brightness(0) opacity(.3)" alt=""><b>？？？</b><span class="lv">冒险中遇到</span></div>`);
-  $('#petGrid').innerHTML = owned.concat(missing).join('');
-};
-function openPetInfo(id) {
-  const p = petByUid(id); if (!p) return;
-  const d = PETS[p.sp], st = petStats(p.sp, p.lv), E = ELEMENTS[d.el], inTeam = P.team.includes(id);
-  modal(`<canvas class="pet live big" data-look="${p.sp}"></canvas>
-    <h2>${d.name} <small>Lv.${p.lv}</small></h2>
-    <p><span class="tag" style="background:${E.light}">${E.icon} ${E.name}属性</span><span class="tag">${SUBJECTS[d.sub].icon} 擅长${SUBJECTS[d.sub].name}</span></p>
-    <div class="expbar"><i style="width:${p.lv >= MAX_LEVEL ? 100 : p.exp / expNeed(p.lv) * 100}%"></i></div>
-    <small>经验 ${p.exp} / ${expNeed(p.lv)}</small>
-    <div class="stats"><div>${st.hp}<small>❤️ 生命</small></div><div>${st.atk}<small>⚔️ 攻击</small></div><div>${st.def}<small>🛡️ 防御</small></div></div>
-    <p class="hint">${d.desc}</p>
-    <div class="sklist">${d.skills.map(s => `<div><b>${s.name}</b> <span class="tag">${SUBJECTS[s.sub].icon} ${SUBJECTS[s.sub].name}</span>
-      ${s.kind === 'attack' ? `威力 ${s.power}${s.hard ? '（难题）' : ''}` : SUPPORT_TEXT[s.kind]}</div>`).join('')}
-      <div>🌟 <b>必杀技：${d.ult}</b>（连续答对 3 题后可用，威力 ${ULT_POWER}）</div></div>
-    <div class="row">
-      ${inTeam ? `<button class="btn ghost" data-act="teamOut" data-uid="${id}" ${P.team.length <= 1 ? 'disabled' : ''}>移出队伍</button>` : `<button class="btn green" data-act="teamIn" data-uid="${id}">加入队伍</button>`}
-      ${P.items.expCandy > 0 && p.lv < MAX_LEVEL ? `<button class="btn" data-act="useExpCandy" data-uid="${id}">🍭 经验糖果（${P.items.expCandy}）</button>` : ''}
-      <button class="btn ghost" data-act="closeModal">关闭</button></div>`);
-}
+// 「我的宠物」、宠物详情、孵蛋、升星、进化、装备在 grow.js
 
 // ---------- 商店 ----------
 RENDER.shop = () => {
@@ -320,12 +304,13 @@ function drawLiveCanvases(host, t) {
     const { ctx, w, h } = f;
     ctx.clearRect(0, 0, w, h);
     const looks = (c.dataset.looks || c.dataset.look || '').split(',').filter(Boolean);
+    const forms = (c.dataset.forms || c.dataset.form || '').split(',').map(Number);
     const n = looks.length;
     looks.forEach((lk, i) => {
       const size = Math.min(h * 0.6, (w / Math.max(1, n)) * 0.7);   // 兔耳朵、鹿角很高，留出头顶空间
       const x = n === 1 ? w * 0.5 : w * (i + 0.5) / n;
       const jump = Math.max(0, Math.sin(clamp((t - heroJump - i * 0.08) * 6, 0, Math.PI))) * 22;
-      PetArt.draw(ctx, lk, x, h * 0.94 - jump, size, t + i * 1.3, {});
+      PetArt.draw(ctx, lk, x, h * 0.94 - jump, size * (forms[i] >= 2 ? 0.9 : 1), t + i * 1.3, { form: forms[i] || 0 });
     });
   }
 }
@@ -335,9 +320,9 @@ let B = null;            // 当前对战
 const ENEMY_DMG = 0.85;  // 对手伤害系数（让孩子更容易赢一点）
 const FOE_HP = 1.3;      // 对手血量系数（让每场多答几题）
 function makeFighter(sp, lv, extra = {}) {
-  const st = petStats(sp, lv), d = PETS[sp];
+  const form = extra.form || 0, st = extra.stats || petStats(sp, lv, { form }), d = PETS[sp];
   const hp = Math.round(st.hp * (extra.hpMul || 1));
-  return { sp, lv, name: d.name, el: d.el, sub: d.sub, skills: d.skills, ult: d.ult, uid: extra.uid || null,
+  return { sp, lv, form, star: extra.star || 1, name: formName(sp, form), el: d.el, sub: d.sub, skills: d.skills, ult: d.ult, uid: extra.uid || null,
     maxHp: hp, hp, atk: st.atk, def: st.def, atkMul: extra.atkMul || (extra.easy ? 0.75 : 1), cds: [0, 0, 0, 0],
     shield: 0, stealth: false, buffT: 0, buffMul: 1, fainted: false,
     anim: { lunge: 0, white: 0, faint: 0, enter: 0, alpha: 1 } };
@@ -351,8 +336,8 @@ async function startBattle(stageIdx, uids) {
   const bonus = teamBonus(myPets.map(p => p.sp)) ? 1.1 : 1;
   B = {
     region: R, stage, stageIdx, first: !P.stages[stage.id],
-    me: { team: myPets.map(p => makeFighter(p.sp, p.lv, { uid: p.uid, atkMul: bonus })), active: 0, rage: 0, items: 0 },
-    foe: { team: resolveTeam(stage).map(([sp, lv]) => makeFighter(sp, lv, { hpMul: (stage.easy ? 1 : FOE_HP) * (stage.boss ? 1.15 : 1), easy: stage.easy })), active: 0 },
+    me: { team: myPets.map(p => makeFighter(p.sp, p.lv, { uid: p.uid, atkMul: bonus, form: p.form, star: p.star, stats: petFull(p) })), active: 0, rage: 0, items: 0 },
+    foe: { team: resolveTeam(stage).map(([sp, lv]) => makeFighter(sp, lv, { form: foeForm(lv), hpMul: (stage.easy ? 1 : FOE_HP) * (stage.boss ? 1.05 : 1), easy: stage.easy })), active: 0 },
     stats: { q: 0, right: 0, crit: 0 }, exp: {}, coins: 0, busy: true, over: false, rounds: 0,
     fx: { parts: [], projs: [], rings: [], shake: 0, flash: 0, darken: 0, bolts: [] },
   };
@@ -515,6 +500,7 @@ function drawPart(ctx, q) {
 }
 
 let lastT = performance.now();
+const DRAW_HOOKS = [];   // grow.js 等模块的额外绘制（宠物蛋、进化仪式）
 function drawBattle(now, dt) {
   const c = $('#bcv'), f = fitCanvas(c); if (!f) return;
   const { ctx, w: W, h: H } = f, R = B.region, fx = B.fx, t = now / 1000;
@@ -543,7 +529,7 @@ function drawBattle(now, dt) {
     const x = p.x + (mine ? -1 : 1) * (1 - A.enter) * W * 0.6;
     let alpha = A.alpha * (fi.stealth ? 0.45 : 1);
     if (fi.buffT) sparkleAura(ctx, x, p.y, p.size, t);
-    PetArt.draw(ctx, fi.sp, x, p.y, p.size, t + (mine ? 0 : 1.7), { flip: !mine, lunge: A.lunge, white: A.white, faint: A.faint, alpha });
+    PetArt.draw(ctx, fi.sp, x, p.y, p.size, t + (mine ? 0 : 1.7), { flip: !mine, lunge: A.lunge, white: A.white, faint: A.faint, alpha, form: fi.form });
     if (fi.shield) {   // 护盾泡泡
       ctx.save(); ctx.globalAlpha = 0.35 + Math.sin(t * 4) * 0.08;
       ctx.fillStyle = '#9fd8ff'; ctx.strokeStyle = '#2f8fe0'; ctx.lineWidth = 3;
@@ -589,6 +575,7 @@ function loop(now) {
   updateTweens(now);
   if (screen === 'battle' && B) drawBattle(now, dt);
   else drawLiveCanvases(`#s-${screen}`, now / 1000);
+  for (const fn of DRAW_HOOKS) fn(now / 1000, dt);
   if ($('#modal.show')) drawLiveCanvases('#modal', now / 1000);
   requestAnimationFrame(loop);
 }
@@ -717,7 +704,7 @@ async function useUlt() {
   const f = active(B.me);
   setMsg(`🌟 ${f.name} 的必杀技「${f.ult}」！`);
   const cut = $('#cutin');
-  cut.innerHTML = `<img src="${petImg(f.sp, 120)}" width="90" height="90" alt=""><span>${f.ult}！</span>`;
+  cut.innerHTML = `<img src="${petImg(f.sp, 120, f.form)}" width="90" height="90" alt=""><span>${f.ult}！</span>`;
   cut.classList.remove('show'); void cut.offsetWidth; cut.classList.add('show');
   sfx('ult'); speak(f.ult);
   tween(B.fx, 'darken', 0.55, 300);
@@ -725,7 +712,7 @@ async function useUlt() {
   const dp = petPos(B.foe);
   for (let k = 0; k < 4; k++) { burst(dp.x + rand(-40, 40), dp.y - dp.size * rand(0.2, 0.8), f.el, 14, 260); await sleep(90); }
   sfx('boom');
-  await attack(B.me, B.foe, ULT_POWER, { ult: true });
+  await attack(B.me, B.foe, ULT_POWER + 10 * f.form, { ult: true });
   await tween(B.fx, 'darken', 0, 300);
   await afterMyAction();
 }
@@ -778,7 +765,7 @@ function chooser(title, list, forced) {
   return new Promise(res => {
     chooser.res = res;
     modal(`<h2>${title}</h2><div class="chooser">${list.map(o => `
-      <button data-act="choose" data-i="${o.i}" ${o.disabled ? 'disabled' : ''}><img src="${petImg(o.f.sp, 64)}" width="48" height="48" alt="">
+      <button data-act="choose" data-i="${o.i}" ${o.disabled ? 'disabled' : ''}><img src="${petImg(o.f.sp, 64, o.f.form)}" width="48" height="48" alt="">
         <span style="flex:1">${o.f.name} <small>Lv.${o.f.lv}</small>${o.note ? `<br><small>${o.note}</small>` : ''}</span>
         <span class="hpbar"><i class="${o.f.hp / o.f.maxHp < 0.25 ? 'low' : o.f.hp / o.f.maxHp < 0.5 ? 'mid' : ''}" style="width:${o.f.hp / o.f.maxHp * 100}%"></i></span></button>`).join('')}</div>
       ${forced ? '' : '<div class="row"><button class="btn ghost" data-act="choose" data-i="-1">取消</button></div>'}`, forced);
@@ -856,7 +843,7 @@ function askQuestion(sub, diff, { tag, kind }) {
     $('#qBody').innerHTML = q.html;
     const showPy = sub === 'zh' && P.settings.pinyin;
     $('#qOpts').innerHTML = q.opts.map((o, i) => `<button class="opt" data-act="answer" data-i="${i}"><span class="k">${i + 1}</span>${esc(o.t)}${showPy && o.py ? `<small>${o.py}</small>` : ''}</button>`).join('');
-    $('#qFeed').innerHTML = `<small>⚡ ${Math.round(critWin)} 秒内答对 = ${kind === 'defense' ? '完美闪避' : kind === 'support' ? '效果更好' : '暴击'}</small>`;
+    $('#qFeed').innerHTML = kind === 'hatch' || kind === 'evolve' ? '' : `<small>⚡ ${Math.round(critWin)} 秒内答对 = ${kind === 'defense' ? '完美闪避' : kind === 'support' ? '效果更好' : '暴击'}</small>`;
     $('#qsheet').classList.add('show');
     speak(q.say);
     tickTimer();
@@ -883,18 +870,24 @@ async function answer(i) {
   const used = (performance.now() - S.start) / 1000;
   const correct = i === S.q.ans, fast = correct && used <= S.critWin;
   $$('#qOpts .opt').forEach((b, k) => { b.disabled = true; if (k === S.q.ans) b.classList.add('right'); else if (k === i) b.classList.add('wrong'); });
-  B.stats.q++; P.stats.q++;
+  const inBattle = !!(B && screen === 'battle');
+  if (inBattle) B.stats.q++;
+  P.stats.q++;
   if (correct) {
-    B.stats.right++; P.stats.right++; if (fast) B.stats.crit++;
-    B.me.rage = Math.min(3, B.me.rage + 1);
-    B.coins += 3;
-    const me = active(B.me); if (me.uid) B.exp[me.uid] = (B.exp[me.uid] || 0) + 2;
+    P.stats.right++;
+    if (inBattle) {
+      B.stats.right++; if (fast) B.stats.crit++;
+      B.me.rage = Math.min(3, B.me.rage + 1);
+      B.coins += 3;
+      const me = active(B.me); if (me.uid) B.exp[me.uid] = (B.exp[me.uid] || 0) + 2;
+    }
     sfx('right'); sfx('coin');
-    const word = fast ? (S.kind === 'defense' ? '⚡ 完美闪避！' : S.kind === 'support' ? '⚡ 超快！效果加强！' : '⚡ 暴击！') : (S.kind === 'defense' ? '✅ 答对了！伤害减半' : '✅ 答对了！');
-    $('#qFeed').innerHTML = `<div class="big ${fast ? 'crit' : 'ok'}">${word}</div><small>+3 🪙 · +2 经验 · 必杀能量 +1</small>`;
+    const word = !inBattle ? (fast ? '⚡ 又快又对！' : '✅ 答对了！') : fast ? (S.kind === 'defense' ? '⚡ 完美闪避！' : S.kind === 'support' ? '⚡ 超快！效果加强！' : '⚡ 暴击！') : (S.kind === 'defense' ? '✅ 答对了！伤害减半' : '✅ 答对了！');
+    const sub = S.kind === 'hatch' ? '蛋壳又裂开了一点！' : S.kind === 'evolve' ? '进化能量 +1' : '+3 🪙 · +2 经验 · 必杀能量 +1';
+    $('#qFeed').innerHTML = `<div class="big ${fast ? 'crit' : 'ok'}">${word}</div><small>${sub}</small>`;
     await sleep(fast ? 900 : 750);
   } else {
-    B.me.rage = 0;
+    if (inBattle) B.me.rage = 0;
     sfx('wrong');
     const right = S.q.opts[S.q.ans].t;
     $('#qFeed').innerHTML = `<div class="big no">${i < 0 ? '⏰ 时间到！' : '❌ 答错了'}</div>
@@ -906,7 +899,7 @@ async function answer(i) {
   }
   $('#qsheet').classList.remove('show');
   save();
-  renderBattle();
+  if (inBattle) renderBattle();
   await sleep(250);
   S.resolve({ correct, fast });
 }
@@ -926,13 +919,18 @@ async function win() {
   const extra = [];
   let joined = null;
   if (first) {
-    if (st.reward) for (const k in st.reward) { P.items[k] = (P.items[k] || 0) + st.reward[k]; extra.push(`${ITEMS[k].icon} ${ITEMS[k].name} ×${st.reward[k]}`); }
+    if (st.reward) for (const k in st.reward) { giveReward(k, st.reward[k]); extra.push(rewardText(k, st.reward[k])); }
     if (st.badge && !P.badges.includes(st.badge)) { P.badges.push(st.badge); extra.push(st.badge); }
     const sp = joinSpecies(st);
     if (sp && !ownsSpecies(sp)) {
       const avg = Math.round(P.pets.reduce((a, p) => a + p.lv, 0) / P.pets.length);
       joined = addPet(sp, Math.max(2, avg - 1));
     }
+  }
+  if (Math.random() < GEAR_DROP || (first && st.boss)) {   // 掉落装备
+    const type = pick(Object.keys(GEAR)), lv = first && st.boss ? 2 : 1;
+    P.gear.push({ id: uid(), type, lv, on: null });
+    extra.push(`${GEAR[type].icon} 掉落：${GEAR[type].name} Lv.${lv}`);
   }
   save();
   sfx('win'); speak('胜利！');
@@ -941,10 +939,11 @@ async function win() {
     <div class="stars">${[0, 1, 2].map(k => `<span class="${k < stars ? '' : 'off'}" style="animation-delay:${0.2 + k * 0.25}s">⭐</span>`).join('')}</div>
     <p>答对 <b>${B.stats.right} / ${B.stats.q}</b> 题${B.stats.crit ? ` · 暴击 ${B.stats.crit} 次` : ''}<br><small>正确率 90% 以上 3 星，70% 以上 2 星</small></p>
     <p><b>🪙 +${B.coins + coinBonus}</b>（答题 ${B.coins} + 胜利 ${coinBonus}）${extra.length ? '<br>' + extra.join(' · ') : ''}</p>
-    <div class="gains">${gains.map(g => `<div class="gain"><img src="${petImg(g.pet.sp, 64)}" width="40" height="40" alt="">
-      <span>${PETS[g.pet.sp].name}<br><small>+${g.n} 经验</small></span>
+    <div class="gains">${gains.map(g => `<div class="gain"><img src="${petImg(g.pet.sp, 64, g.pet.form)}" width="40" height="40" alt="">
+      <span>${petName(g.pet)}<br><small>+${g.n} 经验</small></span>
       <div class="expbar"><i style="width:${g.pet.lv >= MAX_LEVEL ? 100 : g.pet.exp / expNeed(g.pet.lv) * 100}%"></i></div>
       <span class="${g.to > g.from ? 'lvup' : ''}">${g.to > g.from ? `升级！Lv.${g.to}` : `Lv.${g.to}`}</span></div>`).join('')}</div>
+    ${gains.some(g => g.to >= EVOLVE_LV[g.pet.form] && g.pet.form < 2) ? '<p class="hint">✨ 有宠物可以进化了！去「我的宠物」看看</p>' : ''}
     <div class="row"><button class="btn ghost" data-act="again">再打一次</button><button class="btn" data-act="toMap">${joined ? '🎁 看看谁来了' : '回到地图'}</button></div></div>`, true);
   if (gains.some(g => g.to > g.from)) setTimeout(() => sfx('levelup'), 900);
   B.joined = joined;
@@ -957,21 +956,22 @@ async function lose() {
   sfx('lose');
   modal(`<div class="result"><h2>😿 这次输了…</h2>
     <p>答对 <b>${B.stats.right} / ${B.stats.q}</b> 题 · 🪙 +${B.coins}</p>
-    <div class="gains">${gains.map(g => `<div class="gain"><img src="${petImg(g.pet.sp, 64)}" width="40" height="40" alt=""><span>${PETS[g.pet.sp].name} +${g.n} 经验</span><span class="${g.to > g.from ? 'lvup' : ''}">Lv.${g.to}</span></div>`).join('')}</div>
+    <div class="gains">${gains.map(g => `<div class="gain"><img src="${petImg(g.pet.sp, 64, g.pet.form)}" width="40" height="40" alt=""><span>${petName(g.pet)} +${g.n} 经验</span><span class="${g.to > g.from ? 'lvup' : ''}">Lv.${g.to}</span></div>`).join('')}</div>
     <p class="hint">💡 小提示：用克制对手的属性（🔥克🌿，🌿克⚡，⚡克💧，💧克🔥）、在商店买回血药水，或者先打前面的关卡让宠物升级。</p>
     <div class="row"><button class="btn ghost" data-act="toMap">回到地图</button><button class="btn" data-act="again">再试一次</button></div></div>`, true);
 }
 function showJoin(pet) {
   const d = PETS[pet.sp];
   sfx('join'); speak(`${d.name}想加入你的队伍！`);
-  modal(`<div class="joinfx"><canvas class="pet live big" data-look="${pet.sp}"></canvas></div>
-    <h2>🎉 ${d.name} 加入了你的队伍！</h2>
+  modal(`<div class="joinfx"><canvas class="pet live big" data-look="${pet.sp}" data-form="${pet.form || 0}"></canvas></div>
+    <h2>🎉 ${petName(pet)} 加入了你的队伍！</h2><p>${rarityTag(pet.sp)}</p>
     <p><span class="tag" style="background:${ELEMENTS[d.el].light}">${ELEMENTS[d.el].icon} ${ELEMENTS[d.el].name}属性</span><span class="tag">${SUBJECTS[d.sub].icon} 擅长${SUBJECTS[d.sub].name}</span> Lv.${pet.lv}</p>
     <p class="hint">${d.desc}</p>
     <div class="row"><button class="btn big" data-act="closeJoin">太好了！</button></div>`, true);
 }
 
 // ================= 点击事件 =================
+const ACTIONS = {};   // grow.js 等扩展模块注册的按钮动作
 document.addEventListener('click', e => {
   const t = e.target.closest('[data-act],[data-go]');
   if (!t) { if (e.target.id === 'modal' && !modalLock) closeModal(); return; }
@@ -1012,7 +1012,7 @@ document.addEventListener('click', e => {
     case 'teamOut': P.team = P.team.filter(x => x !== d.uid); save(); closeModal(); RENDER.pets(); sfx('tap'); break;
     case 'useExpCandy': {
       const pet = petByUid(d.uid); if (!pet || P.items.expCandy <= 0) return;
-      P.items.expCandy--; pet.lv = Math.min(MAX_LEVEL, pet.lv + 1); save(); sfx('levelup'); toast(`${PETS[pet.sp].name} 升到了 Lv.${pet.lv}！`); openPetInfo(d.uid); RENDER.pets(); break;
+      P.items.expCandy--; pet.lv = Math.min(MAX_LEVEL, pet.lv + 1); save(); sfx('levelup'); toast(`${petName(pet)} 升到了 Lv.${pet.lv}！`); openPetInfo(d.uid); RENDER.pets(); break;
     }
     case 'buy': {
       const it = ITEMS[d.id]; if (P.coins < it.price) return;
@@ -1038,6 +1038,7 @@ document.addEventListener('click', e => {
       if (!B || B.busy) return;
       modal(`<h2>要退出这场对战吗？</h2><p>退出不会得到奖励。</p><div class="row"><button class="btn ghost" data-act="closeModal">继续打</button><button class="btn red" data-act="reallyQuit">退出</button></div>`);
       break;
+    default: if (ACTIONS[a]) ACTIONS[a](d, t); break;
     case 'reallyQuit': B.over = true; closeModal(); B = null; go('map'); break;
     case 'again': { const i = B.stageIdx; closeModal(); B = null; openTeamPick(i); break; }
     case 'toMap': { const j = B && B.joined; closeModal(); B = null; if (j) { screen = 'map'; go('map'); showJoin(j); } else go('map'); break; }
@@ -1057,7 +1058,7 @@ window.addEventListener('resize', () => { if (screen === 'map') drawRoad(); });
 
 // 调试 / 自动测试用
 window.__pets = {
-  get B() { return B; }, get P() { return P; }, get Q() { return Qs; }, get store() { return store; }, get screen() { return screen; },
+  get B() { return B; }, get P() { return P; }, get Q() { return Qs; }, set P(v) { P = v; }, get store() { return store; }, get screen() { return screen; },
   set speed(v) { SPEED = v; }, auto: null, autoFast: null, go, startBattle, makeFighter, calcDamage, giveExp,
   setRegion(i) { mapRegion = i; },
 };
