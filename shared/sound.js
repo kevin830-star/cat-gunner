@@ -132,5 +132,7 @@ const SFX = (() => {
     s[1]();
   }
 
-  return { init, play, setMuted(fn) { isMuted = fn; } };
+  // 其他游戏可以注册自己的音效：SFX.add('name', 冷却毫秒, ({ tone, noise, arp }) => { ... })
+  function add(name, cooldown, fn) { SOUNDS[name] = [cooldown, () => fn({ tone, noise, arp })]; }
+  return { init, play, add, setMuted(fn) { isMuted = fn; } };
 })();

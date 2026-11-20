@@ -1,0 +1,62 @@
+/* 游戏大厅 */
+:root { --ink: #33215c; --paper: #fffaf0; }
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body { margin: 0; min-height: 100%; }
+body {
+  font-family: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", sans-serif;
+  color: var(--ink);
+  background: linear-gradient(170deg, #ffb35c 0%, #ff7eb3 40%, #8b6bff 75%, #4fc3ff 100%) fixed;
+  overflow-x: hidden;
+}
+#bg { position: fixed; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+main { position: relative; max-width: 980px; margin: 0 auto; padding: 22px 16px 40px; }
+
+header { text-align: center; margin: 8px 0 22px; }
+h1 { margin: 0; font-size: clamp(38px, 10vw, 60px); line-height: 1.1; letter-spacing: 2px; }
+h1 span { display: inline-block; color: #fff; text-shadow: 3px 3px 0 var(--ink), -3px 3px 0 var(--ink), 3px -3px 0 var(--ink), -3px -3px 0 var(--ink), 0 7px 0 var(--ink); animation: hop 2.2s ease-in-out infinite; }
+h1 span:nth-child(2) { color: #ffe14a; animation-delay: .2s; }
+h1 span:nth-child(3) { animation-delay: .4s; }
+@keyframes hop { 0%, 100% { transform: translateY(0) rotate(-2deg); } 50% { transform: translateY(-8px) rotate(2deg); } }
+header p { margin: 10px 0 0; color: #fff; font-weight: 900; font-size: 17px; text-shadow: 0 2px 0 rgba(0,0,0,.2); }
+
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 22px; perspective: 900px; }
+.gcard {
+  position: relative; display: flex; flex-direction: column; text-decoration: none; color: var(--ink);
+  background: var(--paper); border: 4px solid var(--ink); border-radius: 28px; overflow: hidden;
+  box-shadow: 0 8px 0 var(--ink), 0 18px 30px rgba(40,20,80,.25);
+  transform-style: preserve-3d; transition: transform .15s ease-out, box-shadow .15s;
+  animation: cardIn .6s cubic-bezier(.2,1.3,.4,1) backwards, float 4s ease-in-out infinite;
+}
+.gcard:nth-child(2) { animation-delay: .12s, 1.3s; }
+.gcard:nth-child(3) { animation-delay: .24s, 2.6s; }
+@keyframes cardIn { from { opacity: 0; transform: translateY(40px) scale(.85) rotate(-3deg); } }
+@keyframes float { 0%, 100% { translate: 0 0; } 50% { translate: 0 -8px; } }
+.gcard:not(.soon):hover { box-shadow: 0 12px 0 var(--ink), 0 26px 40px rgba(40,20,80,.35); }
+.gcard:not(.soon):active { transform: scale(.97) !important; box-shadow: 0 3px 0 var(--ink); }
+.gcard.go { animation: launch .45s ease-in forwards; }
+@keyframes launch { to { transform: scale(1.12); opacity: 0; } }
+
+.scene { display: block; width: 100%; height: 200px; border-bottom: 4px solid var(--ink); }
+.cat .scene { background: linear-gradient(#ffe7a8, #fff6d8 60%, #a8de7f 61%, #86c95f); }
+.pets .scene { background: linear-gradient(#c7b6ff, #e8f4ff 60%, #9be07a 61%, #72c452); }
+.soon .scene { background: linear-gradient(135deg, #d9d2ff, #ffd6ea); }
+.body { padding: 14px 18px 8px; flex: 1; }
+.body h2 { margin: 0 0 8px; font-size: 26px; }
+.body p { margin: 8px 0; line-height: 1.55; font-size: 15px; }
+.tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.tags span { font-size: 13px; font-weight: 900; border: 2px solid var(--ink); border-radius: 999px; padding: 2px 9px; background: #fff; }
+.cat .tags span { background: #ffe3b8; } .pets .tags span { background: #e2d9ff; }
+.save { font-size: 13px; font-weight: 900; color: #7b5cff; min-height: 18px; }
+.play { margin: 4px 18px 18px; text-align: center; font-size: 20px; font-weight: 900; padding: 12px; border: 3px solid var(--ink); border-radius: 18px; box-shadow: 0 4px 0 var(--ink); background: linear-gradient(90deg, #ffc531, #ff9a3c, #ffc531); background-size: 200% 100%; animation: shimmer 2.4s linear infinite; }
+.pets .play { background: linear-gradient(90deg, #9b7bff, #5aa8ff, #9b7bff); background-size: 200% 100%; color: #fff; text-shadow: 0 2px 0 var(--ink); }
+@keyframes shimmer { to { background-position: -200% 0; } }
+
+.shine { position: absolute; inset: 0; pointer-events: none; z-index: 2; background: linear-gradient(115deg, transparent 35%, rgba(255,255,255,.55) 48%, transparent 60%); background-size: 300% 100%; animation: sweep 4.5s ease-in-out infinite; }
+.gcard:nth-child(2) .shine { animation-delay: 1.5s; }
+@keyframes sweep { 0%, 60% { background-position: 150% 0; } 100% { background-position: -150% 0; } }
+.new { position: absolute; top: 14px; right: -34px; z-index: 3; background: #ff4a6a; color: #fff; font-weight: 900; font-size: 14px; padding: 4px 40px; transform: rotate(35deg); border: 3px solid var(--ink); }
+
+.soon { opacity: .88; animation-name: cardIn, float; }
+.soon .body h2 { color: #7b5cff; }
+
+footer { text-align: center; color: #fff; font-weight: 800; font-size: 13px; margin-top: 26px; opacity: .9; }

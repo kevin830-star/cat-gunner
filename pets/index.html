@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#7b5cff">
+<title>宠物学院大乱斗</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+
+  <!-- 选择玩家 -->
+  <section class="screen" id="s-profiles">
+    <div class="logo">
+      <canvas class="pet hero" data-looks="huowei,paopao,yeye" data-h="150"></canvas>
+      <h1>宠物学院<span>大乱斗</span></h1>
+      <p class="sub">收集宠物 · 答题出招 · 挑战擂台</p>
+    </div>
+    <h3 class="sect">选择玩家</h3>
+    <div id="profileList" class="plist"></div>
+    <div class="row center"><a class="btn ghost" href="../">🏠 返回游戏大厅</a></div>
+  </section>
+
+  <!-- 新玩家 -->
+  <section class="screen" id="s-newprofile">
+    <div class="topbar"><button class="back" data-go="profiles">‹</button><h2>新玩家</h2></div>
+    <div class="card form">
+      <label>名字</label>
+      <input id="npName" maxlength="8" placeholder="输入你的名字">
+      <label>头像</label>
+      <div id="npAvatars" class="chips avatars"></div>
+      <label>📖 中文年级</label>
+      <div id="npZh" class="chips grades"></div>
+      <label>🔢 数学年级</label>
+      <div id="npMath" class="chips grades"></div>
+      <p class="hint">两科可以选不同年级。以后可以在「设置」里修改。</p>
+      <button class="btn big" data-act="createProfile">创建玩家</button>
+    </div>
+  </section>
+
+  <!-- 选择第一只宠物 -->
+  <section class="screen" id="s-starter">
+    <h2 class="title">选择你的第一只宠物</h2>
+    <p class="sub center">其他宠物会在冒险中加入你的队伍</p>
+    <div id="starterList" class="starters"></div>
+  </section>
+
+  <!-- 学院主页 -->
+  <section class="screen" id="s-home">
+    <div class="hud" id="homeHud"></div>
+    <div class="stage-hero">
+      <canvas class="pet team" id="homeTeam" data-h="190"></canvas>
+      <div class="badges" id="homeBadges"></div>
+    </div>
+    <div class="menu">
+      <button class="mbtn adv" data-go="map"><b>🗺️</b><span>冒险地图</span><small>挑战擂台主</small></button>
+      <button class="mbtn pets" data-go="pets"><b>🐾</b><span>我的宠物</span><small id="homePetCount"></small></button>
+      <button class="mbtn shop" data-go="shop"><b>🏪</b><span>道具商店</span><small>药水 · 糖果</small></button>
+      <button class="mbtn set" data-go="settings"><b>⚙️</b><span>设置</span><small>年级 · 声音</small></button>
+    </div>
+    <div class="row center">
+      <button class="btn ghost" data-go="profiles">👥 切换玩家</button>
+      <a class="btn ghost" href="../">🏠 游戏大厅</a>
+    </div>
+  </section>
+
+  <!-- 冒险地图 -->
+  <section class="screen" id="s-map">
+    <div class="topbar"><button class="back" data-go="home">‹</button><h2>冒险地图</h2><div class="coins" data-coins></div></div>
+    <div id="regionTabs" class="regions"></div>
+    <div id="mapPath" class="mappath"></div>
+  </section>
+
+  <!-- 我的宠物 -->
+  <section class="screen" id="s-pets">
+    <div class="topbar"><button class="back" data-go="home">‹</button><h2>我的宠物</h2><div class="coins" data-coins></div></div>
+    <h3 class="sect">出战队伍（最多 3 只，第一只先上场）</h3>
+    <div id="teamSlots" class="teamslots"></div>
+    <p class="hint center" id="teamBonus"></p>
+    <h3 class="sect">全部宠物</h3>
+    <div id="petGrid" class="petgrid"></div>
+  </section>
+
+  <!-- 商店 -->
+  <section class="screen" id="s-shop">
+    <div class="topbar"><button class="back" data-go="home">‹</button><h2>道具商店</h2><div class="coins" data-coins></div></div>
+    <p class="hint center">答对题、打赢比赛都能赚金币 🪙</p>
+    <div id="shopList" class="shoplist"></div>
+  </section>
+
+  <!-- 设置 -->
+  <section class="screen" id="s-settings">
+    <div class="topbar"><button class="back" data-go="home">‹</button><h2>设置</h2></div>
+    <div class="card form" id="settingsBody"></div>
+  </section>
+
+  <!-- 对战 -->
+  <section class="screen" id="s-battle">
+    <div class="arena" id="arena">
+      <canvas id="bcv"></canvas>
+      <div class="hpcard enemy" id="hpEnemy"></div>
+      <div class="hpcard mine" id="hpMine"></div>
+      <div class="floaters" id="floaters"></div>
+      <div class="cutin" id="cutin"></div>
+    </div>
+    <div class="controls" id="controls">
+      <div class="msg" id="bmsg">准备战斗！</div>
+      <div class="rage" id="rage"></div>
+      <div class="skills" id="skills"></div>
+      <div class="row tools">
+        <button class="btn small" data-act="openSwitch">🔄 换宠物</button>
+        <button class="btn small" data-act="openItems" id="btnItems">🎒 道具</button>
+        <button class="btn small ghost" data-act="quitBattle">🏳️ 退出</button>
+      </div>
+    </div>
+    <!-- 答题 -->
+    <div class="qsheet" id="qsheet">
+      <div class="qhead"><span id="qTag"></span><button class="speak" data-act="repeatSay">🔊</button></div>
+      <div class="qtimer"><i id="qBar"></i></div>
+      <div class="qbody" id="qBody"></div>
+      <div class="qopts" id="qOpts"></div>
+      <div class="qfeed" id="qFeed"></div>
+    </div>
+  </section>
+
+</div>
+
+<!-- 弹窗 -->
+<div class="modal" id="modal"><div class="mbox" id="mbox"></div></div>
+<div class="toast" id="toast"></div>
+
+<script src="../shared/zh-bank.js"></script>
+<script src="../shared/sound.js"></script>
+<script src="data.js"></script>
+<script src="math.js"></script>
+<script src="quiz.js"></script>
+<script src="art.js"></script>
+<script src="game.js"></script>
+</body>
+</html>
