@@ -31,7 +31,7 @@
 
 ### 题库
 
-- **中文**：与猫咪保卫战共用 `shared/zh-bank.js`（看图选字、偏旁拼字、词语填空、成语填空、古诗填空、读音选择），按年级分级。
+- **中文**：`shared/zh-bank.js`（与猫咪保卫战的题库相同）（看图选字、偏旁拼字、词语填空、成语填空、古诗填空、读音选择），按年级分级。
 - **数学**：`pets/math.js` 按年级随机出题——一年级 20 以内加减；二年级两位数加减、乘法口诀、表内除法；三年级三位数加减、乘除、有余数的除法、周长；四年级两位数乘法、混合运算、简便运算、面积；五年级小数、解方程、分数、三角形面积；六年级分数运算、百分数、圆的面积、比例。每题都有讲解。
 
 ### 后续计划
@@ -43,9 +43,10 @@
 
 ```
 index.html, lobby.css, lobby.js   游戏大厅
-shared/zh-bank.js                 中文题库（两个游戏共用）
-shared/sound.js                   合成音效（两个游戏共用）
-cat/                              猫咪保卫战
+shared/zh-bank.js                 中文题库（宠物学院用，和 cat/data.js 里的题库相同）
+shared/sound.js                   合成音效（宠物学院用）
+cat/                              猫咪保卫战（完整独立：自己的 data.js、sound.js，预生成语音 voices/，
+                                  以及 AI Studio 的 server.js / package.json，在 cat/ 里运行 npm start）
 pets/                             宠物学院大乱斗
   data.js   宠物、技能、道具、关卡
   math.js   数学出题

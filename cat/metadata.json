@@ -1,0 +1,8 @@
+{
+  "name": "猫咪保卫战",
+  "description": "保卫猫窝，顺便学中文！一款结合 2D 俯视角射击与分级中文学习的网页游戏。",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
