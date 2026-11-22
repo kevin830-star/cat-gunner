@@ -228,7 +228,8 @@ const GEAR = {
 const GEAR_MAX = 5;
 const GEAR_BONUS = [0, 0.06, 0.12, 0.18, 0.25, 0.33];   // 1~5 级加成
 const GEAR_DROP = 0.3;                                  // 打赢比赛掉落装备的机会
-const expNeed = lv => 12 + 8 * lv;
+// 10 级以后升级越来越慢（后面的区域对手等级高、经验多）
+const expNeed = lv => 12 + 8 * lv + 2 * Math.max(0, lv - 10) ** 2;
 
 // ---------- 道具 ----------
 const ITEMS = {
@@ -244,7 +245,7 @@ const BATTLE_ITEM_LIMIT = 3;
 // 'S1'、'S2' 是玩家没选的另外两只初始宠物
 const REGIONS = [
   {
-    id: 'grass', name: '新手草原', icon: '🌳', sky: ['#9fe0ff', '#dff6ff'], ground: ['#8fd16a', '#6fb84a'],
+    id: 'grass', name: '新手草原', icon: '🌳', sky: ['#9fe0ff', '#dff6ff'], ground: ['#8fd16a', '#6fb84a'], hill: '#a7d98a', deco: 'clouds',
     stages: [
       { id: 'g1', name: '草原入口', npc: '小路路', face: '🧒', talk: '你也是新生吗？我们来比一比！', team: [['S1', 2]], join: 'S1', easy: true, coins: 60 },
       { id: 'g2', name: '小河边', npc: '泡泡妹', face: '👧', talk: '我的宠物最喜欢在河边练习了！', team: [['S2', 3], ['S1', 2]], join: 'S2', easy: true, coins: 70 },
@@ -255,11 +256,81 @@ const REGIONS = [
       { id: 'g7', name: '草原擂台', npc: '擂台主 · 阿木队长', face: '🧔', talk: '我是草原擂台主！赢了我，你就能拿到草原徽章！', team: [['yeye', 9], ['xingxing', 9], ['yingzi', 10]], join: 'yingzi', boss: true, reward: { egg_rare: 1 }, badge: '🌿 草原徽章', coins: 300 },
     ],
   },
-  { id: 'sea', name: '珊瑚海湾', icon: '🌊', locked: true },
-  { id: 'volcano', name: '火山工坊', icon: '🌋', locked: true },
-  { id: 'storm', name: '雷鸣高原', icon: '⛈️', locked: true },
-  { id: 'castle', name: '星月城堡', icon: '🏰', locked: true },
+  {
+    id: 'sea', name: '珊瑚海湾', icon: '🌊', sky: ['#7fd3ff', '#d8f4ff'], ground: ['#f5dc9a', '#e2bd72'], hill: '#4fb3e8', deco: 'waves',
+    stages: [
+      { id: 's1', name: '珊瑚滩', npc: '渔夫小海', face: '👨', talk: '海边的宠物可比草原的厉害多啦！', team: [['paopao', 10], ['yuanjing', 10]], coins: 150 },
+      { id: 's2', name: '海星湾', npc: '潜水员阿蓝', face: '🧑', talk: '我在海底练了好久，接招吧！', team: [['yuanjing', 11], ['mogu', 11], ['paopao', 11]], reward: { egg_normal: 1 }, coins: 160 },
+      { id: 's3', name: '灯塔下', npc: '灯塔姐姐', face: '👩', talk: '灯塔的光会照亮答对题的人！', team: [['dianwan', 12], ['yuanjing', 12], ['huohu', 11]], coins: 170 },
+      { id: 's4', name: '沉船湾', npc: '船长老海', face: '👴', talk: '这艘沉船里藏着宝贝，赢了就送你！', team: [['bianfu', 13], ['paopao', 13], ['mianyang', 13]], reward: { feather: 1 }, coins: 180 },
+      { id: 's5', name: '珍珠洞', npc: '珍珠公主', face: '👸', talk: '我的宠物闪闪发光，你看得清吗？', team: [['tianma', 13], ['yuanjing', 14], ['yeye', 14]], reward: { egg_normal: 1 }, coins: 190 },
+      { id: 's6', name: '浪花台', npc: '冲浪少年', face: '🏄', talk: '跟上我的浪花节奏！', team: [['huohu', 15], ['dianwan', 15], ['paopao', 15]], reward: { expCandy: 1 }, coins: 210 },
+      { id: 's7', name: '海湾擂台', npc: '擂台主 · 鲸歌船长', face: '🧜', talk: '我是海湾擂台主！听，我的鲸鱼在唱歌！', team: [['mogu', 16], ['mianyang', 16], ['yuanjing', 17]], boss: true, badge: '🌊 海湾徽章', reward: { egg_rare: 1 }, coins: 400 },
+    ],
+  },
+  {
+    id: 'volcano', name: '火山工坊', icon: '🌋', sky: ['#ff9a6a', '#ffd9b0'], ground: ['#7a5444', '#563a2e'], hill: '#9a6250', deco: 'lava',
+    stages: [
+      { id: 'v1', name: '火山脚下', npc: '工匠学徒', face: '🧑‍🔧', talk: '火山工坊可热了，小心别被烫到！', team: [['huowei', 17], ['huohu', 17]], coins: 220 },
+      { id: 'v2', name: '温泉谷', npc: '温泉奶奶', face: '👵', talk: '泡完温泉，宠物们精神百倍！', team: [['yuanjing', 18], ['huowei', 18], ['mogu', 18]], reward: { egg_normal: 1 }, coins: 230 },
+      { id: 'v3', name: '熔岩桥', npc: '守桥人', face: '💂', talk: '想过熔岩桥？先答对我的题！', team: [['huohu', 19], ['dianwan', 19], ['yingzi', 18]], coins: 240 },
+      { id: 'v4', name: '火龙洞', npc: '探险家', face: '🧗', talk: '洞里好像住着火龙……', team: [['huowei', 20], ['bianfu', 20], ['tianma', 19]], reward: { feather: 1 }, coins: 250 },
+      { id: 'v5', name: '铁匠铺', npc: '铁匠大叔', face: '👨‍🏭', talk: '我打的装备最结实了！', team: [['mogu', 20], ['huohu', 21], ['mianyang', 20]], reward: { egg_normal: 1 }, coins: 260 },
+      { id: 'v6', name: '火山口', npc: '火焰舞者', face: '💃', talk: '跟着火焰一起跳舞吧！', team: [['xingxing', 21], ['huowei', 21], ['yuanjing', 21]], reward: { expCandy: 1 }, coins: 280 },
+      { id: 'v7', name: '火山擂台', npc: '擂台主 · 炎铸大师', face: '🧙', talk: '我是火山擂台主！我的宠物是用火焰锻造的！', team: [['huohu', 22], ['tianma', 22], ['huowei', 23]], boss: true, badge: '🌋 火山徽章', reward: { egg_rare: 1 }, coins: 500 },
+    ],
+  },
+  {
+    id: 'storm', name: '雷鸣高原', icon: '⛈️', sky: ['#5b6b8c', '#a9b8d6'], ground: ['#5e7d5a', '#45603f'], hill: '#6f8a92', deco: 'storm',
+    stages: [
+      { id: 't1', name: '风暴入口', npc: '风筝男孩', face: '👦', talk: '风好大！我的风筝都飞走了！', team: [['mianyang', 23], ['dianwan', 23]], coins: 300 },
+      { id: 't2', name: '雷云桥', npc: '气象员', face: '🧑‍🔬', talk: '今天的天气预报：有雷，有宠物对战！', team: [['dianwan', 24], ['paopao', 24], ['mianyang', 24]], reward: { egg_normal: 1 }, coins: 310 },
+      { id: 't3', name: '闪电林', npc: '护林员', face: '🧝', talk: '树林里的闪电会帮我的宠物充电。', team: [['yeye', 24], ['mogu', 25], ['dianwan', 25]], coins: 320 },
+      { id: 't4', name: '风车高地', npc: '风车爷爷', face: '👴', talk: '风车转得越快，我越开心！', team: [['tianma', 25], ['bianfu', 25], ['mianyang', 26]], reward: { feather: 1 }, coins: 330 },
+      { id: 't5', name: '雷鸣塔', npc: '塔顶法师', face: '🧙‍♀️', talk: '能爬上雷鸣塔的人可不多！', team: [['huohu', 26], ['dianwan', 26], ['yuanjing', 26]], reward: { egg_normal: 1 }, coins: 340 },
+      { id: 't6', name: '风暴眼', npc: '飞行员', face: '🧑‍✈️', talk: '风暴中间反而最安静哦。', team: [['yingzi', 27], ['mianyang', 27], ['tianma', 27]], reward: { expCandy: 1 }, coins: 360 },
+      { id: 't7', name: '高原擂台', npc: '擂台主 · 雷霆队长', face: '🦸', talk: '我是高原擂台主！感受雷霆的力量吧！', team: [['mogu', 28], ['mianyang', 28], ['dianwan', 29]], boss: true, badge: '⚡ 高原徽章', reward: { egg_rare: 1 }, coins: 600 },
+    ],
+  },
+  {
+    id: 'castle', name: '星月城堡', icon: '🏰', sky: ['#2a1f5c', '#6b5bb0'], ground: ['#4a4070', '#352d55'], hill: '#3c3368', deco: 'stars',
+    stages: [
+      { id: 'c1', name: '城堡大门', npc: '守门骑士', face: '🤺', talk: '只有最厉害的学生才能进入星月城堡！', team: [['yingzi', 28], ['xingxing', 28]], coins: 380 },
+      { id: 'c2', name: '星光长廊', npc: '画家', face: '🧑‍🎨', talk: '长廊里的每幅画都在看着你。', team: [['xingxing', 29], ['bianfu', 28], ['tianma', 28]], reward: { egg_normal: 1 }, coins: 400 },
+      { id: 'c3', name: '月影图书馆', npc: '图书管理员', face: '🧑‍🏫', talk: '图书馆里的书，我全都读过！', team: [['bianfu', 29], ['yuanjing', 29], ['xingxing', 29]], coins: 420 },
+      { id: 'c4', name: '镜子大厅', npc: '镜子魔法师', face: '🪄', talk: '镜子里的宠物，哪个才是真的？', team: [['tianma', 29], ['yingzi', 29], ['huohu', 29]], reward: { feather: 1 }, coins: 440 },
+      { id: 'c5', name: '钟楼', npc: '敲钟人', face: '🔔', talk: '钟声响起，决战就要开始了！', team: [['xingxing', 30], ['mianyang', 30], ['mogu', 30]], reward: { egg_rare: 1 }, coins: 460 },
+      { id: 'c6', name: '王座前厅', npc: '城堡管家', face: '🤵', talk: '院长就在里面等着你。', team: [['yingzi', 30], ['tianma', 30], ['huowei', 30]], reward: { expCandy: 2 }, coins: 500 },
+      { id: 'c7', name: '学院冠军之战', npc: '院长 · 星月老师', face: '🧙‍♂️', talk: '恭喜你走到这里！最后一战，让我看看你学到了多少！', team: [['xingxing', 30], ['yingzi', 30], ['tianma', 30]], boss: true, final: true, badge: '👑 学院冠军', reward: { egg_rare: 2 }, coins: 1000 },
+    ],
+  },
 ];
+
+// ---------- 第 3 版：天梯、每日任务、签到 ----------
+const LADDER_TIERS = [
+  { name: '青铜', icon: '🥉', pts: 0, lvAdd: -1 },
+  { name: '白银', icon: '🥈', pts: 100, lvAdd: 0 },
+  { name: '黄金', icon: '🥇', pts: 250, lvAdd: 1 },
+  { name: '钻石', icon: '💎', pts: 450, lvAdd: 2 },
+  { name: '冠军', icon: '🏆', pts: 700, lvAdd: 3 },
+];
+const LADDER_WIN = 25;
+const LADDER_LOSE = 10;
+const LADDER_NPCS = [['小艾', '👧'], ['阿乐', '👦'], ['朵朵', '👧'], ['大熊', '🧑'], ['米米', '👩'], ['豆豆', '👦'], ['星辰', '🧒'], ['可可', '👧'], ['阿杰', '🧑'], ['飞飞', '👦']];
+const DAILY_POOL = [
+  { id: 'right', name: '答对 20 题', target: 20, reward: { coins: 60 } },
+  { id: 'zh', name: '答对 10 道中文题', target: 10, reward: { coins: 50 } },
+  { id: 'math', name: '答对 10 道数学题', target: 10, reward: { coins: 50 } },
+  { id: 'win', name: '打赢 3 场比赛', target: 3, reward: { coins: 80 } },
+  { id: 'crit', name: '打出 5 次暴击', target: 5, reward: { coins: 60 } },
+  { id: 'ult', name: '放 2 次必杀技', target: 2, reward: { coins: 60 } },
+  { id: 'hatch', name: '孵化 1 个宠物蛋', target: 1, reward: { coins: 50 } },
+  { id: 'mistake', name: '打败 1 次错题怪兽', target: 1, reward: { egg_normal: 1 } },
+  { id: 'ladder', name: '天梯赛赢 1 场', target: 1, reward: { coins: 80 } },
+];
+const DAILY_ALL_BONUS = { egg_normal: 1 };   // 三个任务都完成再送一个蛋
+const CHECKIN_REWARDS = [{ coins: 30 }, { coins: 40 }, { coins: 50 }, { coins: 60 }, { coins: 80 }, { coins: 100 }, { egg_rare: 1 }];
+const MISTAKE_MAX = 40;
 
 // ---------- 玩家设置 ----------
 const AVATARS = ['🐱', '🐶', '🐰', '🦊', '🐼', '🐯', '🦁', '🐨', '🐸', '🐧', '🦄', '🐲'];

@@ -106,10 +106,12 @@ function giveExp(pet, n) {
   if (pet.lv >= MAX_LEVEL) pet.exp = 0;
   return { from, to: pet.lv };
 }
+// arena.js 会替换这些钩子
+const HOOKS = { track() {}, mistake() {}, mistakeDone() {}, ladderResult() { return []; } };
 const teamBonus = sps => new Set(sps.map(sp => PETS[sp].sub)).size >= 2;
 const petName = p => formName(p.sp, p.form || 0);
-function gearBonus(id) { const g = { hp: 0, atk: 0, def: 0 }; for (const it of P.gear) if (it.on === id) g[GEAR[it.type].stat] += GEAR_BONUS[it.lv]; return g; }
-const petFull = p => petStats(p.sp, p.lv, { star: p.star, form: p.form, gearBonus: gearBonus(p.uid) });
+function gearBonus(id, prof = P) { const g = { hp: 0, atk: 0, def: 0 }; for (const it of prof.gear) if (it.on === id) g[GEAR[it.type].stat] += GEAR_BONUS[it.lv]; return g; }
+const petFull = (p, prof = P) => petStats(p.sp, p.lv, { star: p.star, form: p.form, gearBonus: gearBonus(p.uid, prof) });
 const foeForm = lv => (lv >= EVOLVE_LV[1] ? 2 : lv >= EVOLVE_LV[0] ? 1 : 0);   // 对手到了进化等级也会进化
 const starStr = n => '★'.repeat(n || 1);
 const rarityTag = sp => { const r = RARITY[PETS[sp].rarity || 'N']; return `<span class="rar" style="background:${r.color}">${r.name}</span>`; };
@@ -177,6 +179,8 @@ RENDER.home = () => {
 
 // ---------- 地图 ----------
 let mapRegion = 0;
+// 打败上一个区域的擂台主，就解锁下一个区域
+const regionOpen = i => i === 0 || !!P.stages[REGIONS[i - 1].stages[REGIONS[i - 1].stages.length - 1].id];
 const stageStatus = (region, i) => {
   const st = region.stages[i];
   if (P.stages[st.id]) return 'done';
@@ -184,10 +188,12 @@ const stageStatus = (region, i) => {
   return 'lock';
 };
 RENDER.map = () => {
-  $('#regionTabs').innerHTML = REGIONS.map((r, i) => `<button class="rtab ${i === mapRegion ? 'on' : ''} ${r.locked ? 'locked' : ''}" data-act="region" data-i="${i}">${r.icon} ${r.name}${r.locked ? ' 🔒' : ''}</button>`).join('');
+  $('#regionTabs').innerHTML = REGIONS.map((r, i) => `<button class="rtab ${i === mapRegion ? 'on' : ''} ${regionOpen(i) ? '' : 'locked'}" data-act="region" data-i="${i}">${r.icon} ${r.name}${regionOpen(i) ? '' : ' 🔒'}</button>`).join('');
   const R = REGIONS[mapRegion], box = $('#mapPath');
-  if (R.locked) {
-    box.innerHTML = `<div class="lockedRegion"><b>${R.icon}</b>${R.name}<br><small>正在建造中，打败前面的擂台主后开放！</small></div>`;
+  box.style.background = `linear-gradient(${R.sky[0]}, ${R.sky[1]} 35%, ${R.ground[0]} 36%, ${R.ground[1]})`;
+  if (!regionOpen(mapRegion)) {
+    const prev = REGIONS[mapRegion - 1];
+    box.innerHTML = `<div class="lockedRegion"><b>${R.icon}</b>${R.name}<br><small>打败「${prev.name}」的擂台主后开放！</small></div>`;
     return;
   }
   // 从下往上走：第 1 关在最下面
@@ -227,6 +233,7 @@ const joinSpecies = stage => stage.join === 'S1' ? otherStarters()[0] : stage.jo
 
 function openStage(i) {
   const R = REGIONS[mapRegion], st = R.stages[i];
+  if (!regionOpen(mapRegion)) { toast('这个区域还没解锁'); return; }
   if (stageStatus(R, i) === 'lock') { toast('先打赢前面的关卡哦！'); return; }
   const first = !P.stages[st.id], foes = resolveTeam(st), join = joinSpecies(st);
   const rewards = [];
@@ -330,24 +337,37 @@ function makeFighter(sp, lv, extra = {}) {
 const active = side => side.team[side.active];
 const aliveIdx = side => side.team.map((f, i) => (f.fainted ? -1 : i)).filter(i => i >= 0);
 
-async function startBattle(stageIdx, uids) {
-  const R = REGIONS[mapRegion], stage = R.stages[stageIdx];
-  const myPets = uids.map(petByUid).filter(Boolean);
-  const bonus = teamBonus(myPets.map(p => p.sp)) ? 1.1 : 1;
+// 一方的队伍（prof = 这一方的玩家存档）
+function makeSide(prof, uids) {
+  const pets = uids.map(id => prof.pets.find(p => p.uid === id)).filter(Boolean);
+  const bonus = teamBonus(pets.map(p => p.sp)) ? 1.1 : 1;
+  return { prof, team: pets.map(p => makeFighter(p.sp, p.lv, { uid: p.uid, atkMul: bonus, form: p.form, star: p.star, stats: petFull(p, prof) })),
+    active: 0, rage: 0, items: 0, coins: 0, stats: { q: 0, right: 0, crit: 0 } };
+}
+// stageArg：当前区域的关卡编号，或者一个关卡对象（天梯、错题怪兽、双人对战）
+// opts：region 背景、foes 直接给对手、pvp 对手玩家、mq 错题队列
+async function startBattle(stageArg, uids, opts = {}) {
+  const story = typeof stageArg === 'number';
+  const stage = story ? REGIONS[mapRegion].stages[stageArg] : stageArg;
+  const R = opts.region || REGIONS[mapRegion];
+  const me = makeSide(P, uids);
+  const foe = opts.pvp ? makeSide(opts.pvp, opts.pvp.team)
+    : { prof: null, team: opts.foes || resolveTeam(stage).map(([sp, lv]) => makeFighter(sp, lv, { form: foeForm(lv), hpMul: (stage.easy || !story ? 1 : FOE_HP) * (stage.boss ? 1.05 : 1), easy: stage.easy })),
+      active: 0, rage: 0, items: 0, coins: 0, stats: { q: 0, right: 0, crit: 0 } };
   B = {
-    region: R, stage, stageIdx, first: !P.stages[stage.id],
-    me: { team: myPets.map(p => makeFighter(p.sp, p.lv, { uid: p.uid, atkMul: bonus, form: p.form, star: p.star, stats: petFull(p) })), active: 0, rage: 0, items: 0 },
-    foe: { team: resolveTeam(stage).map(([sp, lv]) => makeFighter(sp, lv, { form: foeForm(lv), hpMul: (stage.easy ? 1 : FOE_HP) * (stage.boss ? 1.05 : 1), easy: stage.easy })), active: 0 },
-    stats: { q: 0, right: 0, crit: 0 }, exp: {}, coins: 0, busy: true, over: false, rounds: 0,
+    region: R, stage, stageIdx: story ? stageArg : -1, mode: story ? 'story' : stage.mode, first: story && !P.stages[stage.id],
+    me, foe, act: me, opp: foe, stats: me.stats, pvp: !!opts.pvp, mq: opts.mq || null,
+    exp: {}, busy: true, over: false, rounds: 0,
     fx: { parts: [], projs: [], rings: [], shake: 0, flash: 0, darken: 0, bolts: [] },
   };
   closeModal();
   go('battle');
   renderBattle();
-  setMsg(`${stage.npc}：「${stage.talk}」`);
+  setMsg(B.pvp ? `⚔️ ${P.avatar} ${esc(P.name)} VS ${opts.pvp.avatar} ${esc(opts.pvp.name)}` : `${stage.npc}：「${stage.talk}」`);
+  if (B.pvp) speak(`${P.name}对${opts.pvp.name}，对战开始！`);
   await sleep(900);
   await enter(B.foe);
-  setMsg(`${stage.npc}派出了 ${active(B.foe).name}！`);
+  setMsg(B.pvp ? `${esc(opts.pvp.name)} 派出了 ${active(B.foe).name}！` : `${stage.npc}派出了 ${active(B.foe).name}！`);
   await sleep(700);
   await enter(B.me);
   setMsg(`上吧，${active(B.me).name}！`);
@@ -360,7 +380,7 @@ function setMsg(t) { $('#bmsg').innerHTML = t; }
 function hpCard(side, el) {
   const f = active(side), pct = f.hp / f.maxHp * 100;
   const st = [f.shield ? `🛡️×${f.shield}` : '', f.buffT ? `💪${f.buffT}` : '', f.stealth ? '👻' : ''].filter(Boolean).join(' ');
-  el.innerHTML = `<div class="nm"><span>${ELEMENTS[f.el].icon} ${f.name}</span><small>Lv.${f.lv}</small></div>
+  el.innerHTML = `${B.pvp ? `<div class="owner ${side === B.act ? 'turn' : ''}">${side.prof.avatar} ${esc(side.prof.name)}${side === B.act ? ' · 出招中' : ''}</div>` : ''}<div class="nm"><span>${ELEMENTS[f.el].icon} ${f.name}</span><small>Lv.${f.lv}</small></div>
     <div class="hpbar"><i class="${pct < 25 ? 'low' : pct < 50 ? 'mid' : ''}" style="width:${pct}%"></i></div>
     <div class="nm"><span class="st">${st}</span><span class="hpn">${Math.ceil(f.hp)} / ${f.maxHp}</span></div>
     <div class="balls">${side.team.map(x => `<i class="${x.fainted ? 'out' : ''}"></i>`).join('')}</div>`;
@@ -368,9 +388,9 @@ function hpCard(side, el) {
 function renderBattle() {
   if (!B) return;
   hpCard(B.foe, $('#hpEnemy')); hpCard(B.me, $('#hpMine'));
-  const f = active(B.me), dis = B.busy || B.over;
-  $('#rage').innerHTML = `必杀能量 ${[0, 1, 2].map(i => `<span class="pip ${i < B.me.rage ? 'on' : ''}"></span>`).join('')}
-    ${B.me.rage >= 3 && !dis ? `<button class="ultbtn" data-act="ult">🌟 必杀技：${f.ult}</button>` : ''}`;
+  const f = active(B.act), dis = B.busy || B.over;
+  $('#rage').innerHTML = `${B.pvp ? `${B.act.prof.avatar} ` : ''}必杀能量 ${[0, 1, 2].map(i => `<span class="pip ${i < B.act.rage ? 'on' : ''}"></span>`).join('')}
+    ${B.act.rage >= 3 && !dis ? `<button class="ultbtn" data-act="ult">🌟 必杀技：${f.ult}</button>` : ''}`;
   $('#skills').innerHTML = f.skills.map((s, i) => {
     const E = ELEMENTS[f.el], S = SUBJECTS[s.sub], cd = f.cds[i];
     const info = s.kind === 'attack' ? `${E.icon} 威力 ${s.power}${s.hard ? ' · 难题' : ''}` : { heal: '💚 恢复生命', shield: '🛡️ 伤害减半 ×2', buff: '💪 攻击 ×1.4', stealth: '👻 躲开下一招' }[s.kind];
@@ -379,7 +399,9 @@ function renderBattle() {
       ${cd ? `<span class="cd">冷却 ${cd} 回合</span>` : ''}</button>`;
   }).join('');
   $$('#controls .tools button').forEach(b => { b.disabled = dis; });
-  $('#btnItems').textContent = `🎒 道具（${BATTLE_ITEM_LIMIT - B.me.items}）`;
+  $('#btnItems').textContent = B.pvp ? '🎒 道具（对战中不可用）' : `🎒 道具（${BATTLE_ITEM_LIMIT - B.me.items}）`;
+  if (B.pvp) $('#btnItems').disabled = true;
+  $('#controls').classList.toggle('p2turn', B.pvp && B.act === B.foe);
 }
 
 // ---------- 飘字 ----------
@@ -510,9 +532,10 @@ function drawBattle(now, dt) {
   const sky = ctx.createLinearGradient(0, 0, 0, H * 0.62);
   sky.addColorStop(0, R.sky[0]); sky.addColorStop(1, R.sky[1]);
   ctx.fillStyle = sky; ctx.fillRect(-20, -20, W + 40, H + 40);
-  ctx.fillStyle = 'rgba(255,255,255,.8)';
+  ctx.fillStyle = R.deco === 'clouds' || R.deco === 'waves' ? 'rgba(255,255,255,.8)' : 'rgba(255,255,255,0)';
   for (let i = 0; i < 3; i++) { const cx = ((t * 8 + i * W / 2.4) % (W + 120)) - 60, cy = H * (0.1 + i * 0.07); ctx.beginPath(); ctx.arc(cx, cy, 16, 0, 7); ctx.arc(cx + 18, cy - 6, 20, 0, 7); ctx.arc(cx + 38, cy, 15, 0, 7); ctx.fill(); }
-  ctx.fillStyle = '#a7d98a'; ctx.beginPath(); ctx.moveTo(-20, H * 0.6);
+  drawDeco(ctx, W, H, t, R.deco);
+  ctx.fillStyle = R.hill || '#a7d98a'; ctx.beginPath(); ctx.moveTo(-20, H * 0.6);
   for (let x = -20; x <= W + 20; x += 20) ctx.lineTo(x, H * 0.52 + Math.sin(x / 70) * 14 + Math.sin(x / 31) * 5);
   ctx.lineTo(W + 20, H); ctx.lineTo(-20, H); ctx.fill();
   const gr = ctx.createLinearGradient(0, H * 0.58, 0, H);
@@ -529,7 +552,8 @@ function drawBattle(now, dt) {
     const x = p.x + (mine ? -1 : 1) * (1 - A.enter) * W * 0.6;
     let alpha = A.alpha * (fi.stealth ? 0.45 : 1);
     if (fi.buffT) sparkleAura(ctx, x, p.y, p.size, t);
-    PetArt.draw(ctx, fi.sp, x, p.y, p.size, t + (mine ? 0 : 1.7), { flip: !mine, lunge: A.lunge, white: A.white, faint: A.faint, alpha, form: fi.form });
+    PetArt.draw(ctx, fi.sp, x, p.y, p.size, t + (mine ? 0 : 1.7), { flip: !mine, lunge: A.lunge, white: A.white, faint: A.faint, alpha, form: fi.form, tint: fi.monster ? '#8a3cff' : null });
+    if (fi.monster) for (let k = 0; k < 3; k++) { ctx.font = `900 ${p.size * 0.18}px sans-serif`; ctx.fillStyle = 'rgba(200,150,255,.85)'; ctx.fillText('?', x + Math.cos(t * 2 + k * 2.1) * p.size * 0.45, p.y - p.size * 0.6 + Math.sin(t * 2 + k * 2.1) * p.size * 0.25); }
     if (fi.shield) {   // 护盾泡泡
       ctx.save(); ctx.globalAlpha = 0.35 + Math.sin(t * 4) * 0.08;
       ctx.fillStyle = '#9fd8ff'; ctx.strokeStyle = '#2f8fe0'; ctx.lineWidth = 3;
@@ -562,6 +586,28 @@ function drawBattle(now, dt) {
   if (fx.flash > 0) { ctx.fillStyle = `rgba(255,255,255,${fx.flash})`; ctx.fillRect(-20, -20, W + 40, H + 40); fx.flash = Math.max(0, fx.flash - dt * 2.5); }
   ctx.restore();
 }
+// 区域背景装饰：海浪、火山、雷雨、星空
+function drawDeco(ctx, W, H, t, deco) {
+  if (deco === 'waves') {
+    ctx.fillStyle = '#3aa0de'; ctx.fillRect(-20, H * 0.42, W + 40, H * 0.2);
+    ctx.strokeStyle = 'rgba(255,255,255,.7)'; ctx.lineWidth = 3;
+    for (let k = 0; k < 3; k++) { ctx.beginPath(); for (let x = -20; x <= W + 20; x += 10) ctx.lineTo(x, H * (0.45 + k * 0.05) + Math.sin(x / 26 + t * 2 + k) * 3); ctx.stroke(); }
+  } else if (deco === 'lava') {
+    ctx.fillStyle = '#5a3a30'; ctx.beginPath(); ctx.moveTo(W * 0.45, H * 0.56); ctx.lineTo(W * 0.62, H * 0.16); ctx.lineTo(W * 0.72, H * 0.16); ctx.lineTo(W * 0.92, H * 0.56); ctx.fill();
+    const g = ctx.createRadialGradient(W * 0.67, H * 0.15, 4, W * 0.67, H * 0.15, 60);
+    g.addColorStop(0, 'rgba(255,200,80,.95)'); g.addColorStop(1, 'rgba(255,90,40,0)'); ctx.fillStyle = g; ctx.beginPath(); ctx.arc(W * 0.67, H * 0.15, 60, 0, 7); ctx.fill();
+    for (let i = 0; i < 6; i++) { const k = (t * 0.4 + i / 6) % 1; ctx.fillStyle = `rgba(255,${140 + i * 15},60,${1 - k})`; ctx.beginPath(); ctx.arc(W * 0.67 + Math.sin(i * 2 + t) * 20 * k, H * 0.15 - k * 70, 4 - k * 2, 0, 7); ctx.fill(); }
+  } else if (deco === 'storm') {
+    ctx.fillStyle = 'rgba(60,70,95,.85)';
+    for (let i = 0; i < 4; i++) { const cx = ((t * 12 + i * W / 3) % (W + 160)) - 80, cy = H * (0.08 + (i % 2) * 0.06); ctx.beginPath(); ctx.arc(cx, cy, 26, 0, 7); ctx.arc(cx + 30, cy - 8, 30, 0, 7); ctx.arc(cx + 60, cy, 24, 0, 7); ctx.fill(); }
+    if (Math.sin(t * 1.7) > 0.985) { ctx.fillStyle = 'rgba(255,255,230,.35)'; ctx.fillRect(-20, -20, W + 40, H + 40); }
+  } else if (deco === 'stars') {
+    for (let i = 0; i < 40; i++) { const x = (i * 97.3) % W, y = (i * 53.7) % (H * 0.5); ctx.globalAlpha = 0.5 + Math.sin(t * 3 + i) * 0.5; PetArt.star(ctx, x, y, 2 + (i % 3), '#fff7c0'); }
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = '#fff3b0'; ctx.beginPath(); ctx.arc(W * 0.82, H * 0.14, 22, 0, 7); ctx.fill();
+    ctx.fillStyle = '#2a1f5c'; ctx.beginPath(); ctx.arc(W * 0.85, H * 0.12, 20, 0, 7); ctx.fill();
+  }
+}
 function sparkleAura(ctx, x, y, size, t) {
   for (let i = 0; i < 6; i++) {
     const a = t * 2 + i * 1.05, r = size * 0.5;
@@ -587,6 +633,7 @@ function calcDamage(att, def, power, opts = {}) {
   d *= em;
   if (opts.crit) d *= 1.5;
   if (opts.weak) d *= 0.5;
+  if (opts.boost) d *= opts.boost;
   if (opts.enemy) d *= ENEMY_DMG;
   d *= rand(0.92, 1.08);
   return { dmg: Math.max(1, Math.round(d)), em };
@@ -638,17 +685,29 @@ async function faint(side) {
 function playerTurn() {
   if (!B || B.over) return;
   B.rounds++;
-  const f = active(B.me);
+  const f = active(B.act);
   f.cds = f.cds.map(c => Math.max(0, c - 1));
   B.busy = false;
-  setMsg(B.me.rage >= 3 ? '必杀能量满了！可以放必杀技！' : `轮到你了！选一个技能出招`);
+  const who = B.pvp ? `轮到 ${B.act.prof.avatar} <b>${esc(B.act.prof.name)}</b> 了！` : '轮到你了！';
+  setMsg(B.act.rage >= 3 ? `${who}必杀能量满了，可以放必杀技！` : `${who}选一个技能出招`);
+  if (B.pvp) speak(`轮到${B.act.prof.name}了`);
   renderBattle();
 }
 async function afterMyAction() {
-  const me = active(B.me);
+  const me = active(B.act);
   if (me.buffT) me.buffT--;
   renderBattle();
   if (B.over) return;
+  if (B.pvp) {   // 双人对战：对方宠物倒下就让对方选下一只，然后换人出招
+    if (active(B.opp).fainted) {
+      if (!aliveIdx(B.opp).length) { await pvpEnd(B.act); return; }
+      await chooseNext(true, B.opp);
+    }
+    [B.act, B.opp] = [B.opp, B.act];
+    await sleep(300);
+    playerTurn();
+    return;
+  }
   if (active(B.foe).fainted) { if (!(await nextFoe())) return; }
   await sleep(350);
   await enemyTurn();
@@ -666,16 +725,19 @@ async function nextFoe() {
 
 async function useSkill(i) {
   if (!B || B.busy || B.over) return;
-  const f = active(B.me), s = f.skills[i];
+  const f = active(B.act), s = f.skills[i];
   if (f.cds[i]) return;
   B.busy = true; renderBattle();
   sfx('tap');
-  const res = await askQuestion(s.sub, s.hard ? 1 : 0, { tag: `${SUBJECTS[s.sub].icon} ${f.name} · ${s.name}${s.hard ? '（难题，威力更大）' : ''}`, kind: s.kind === 'attack' ? 'attack' : 'support' });
+  // 错题怪兽：攻击时出的是以前答错的题，答对伤害 ×1.5 并且从错题本里划掉
+  const mq = B.mode === 'mistake' && s.kind === 'attack' && B.mq && B.mq.length ? B.mq.shift() : null;
+  const res = await askQuestion(mq ? mq.sub : s.sub, s.hard ? 1 : 0, { tag: mq ? `👾 错题重练 · ${SUBJECTS[mq.sub].icon} ${mq.type}` : `${SUBJECTS[s.sub].icon} ${f.name} · ${s.name}${s.hard ? '（难题，威力更大）' : ''}`, kind: s.kind === 'attack' ? 'attack' : 'support', q: mq });
+  if (mq) { if (res.correct) HOOKS.mistakeDone(B.act.prof, mq); else B.mq.push(mq); }
   setMsg(`${f.name} 使用了「${s.name}」！`);
   if (s.kind === 'attack') {
-    await attack(B.me, B.foe, s.power, { crit: res.correct && res.fast, weak: !res.correct });
+    await attack(B.act, B.opp, s.power, { crit: res.correct && res.fast, weak: !res.correct, boost: mq && res.correct ? 1.5 : 1 });
   } else {
-    await support(B.me, s.kind, res);
+    await support(B.act, s.kind, res);
     f.cds[i] = SUPPORT_CD + 1;
   }
   await afterMyAction();
@@ -699,9 +761,10 @@ async function support(side, kind, res) {
 }
 
 async function useUlt() {
-  if (!B || B.busy || B.over || B.me.rage < 3) return;
-  B.busy = true; B.me.rage = 0; renderBattle();
-  const f = active(B.me);
+  if (!B || B.busy || B.over || B.act.rage < 3) return;
+  B.busy = true; B.act.rage = 0; renderBattle();
+  const f = active(B.act);
+  HOOKS.track('ult', 1, B.act.prof || P);
   setMsg(`🌟 ${f.name} 的必杀技「${f.ult}」！`);
   const cut = $('#cutin');
   cut.innerHTML = `<img src="${petImg(f.sp, 120, f.form)}" width="90" height="90" alt=""><span>${f.ult}！</span>`;
@@ -709,10 +772,10 @@ async function useUlt() {
   sfx('ult'); speak(f.ult);
   tween(B.fx, 'darken', 0.55, 300);
   await sleep(1300);
-  const dp = petPos(B.foe);
+  const dp = petPos(B.opp);
   for (let k = 0; k < 4; k++) { burst(dp.x + rand(-40, 40), dp.y - dp.size * rand(0.2, 0.8), f.el, 14, 260); await sleep(90); }
   sfx('boom');
-  await attack(B.me, B.foe, ULT_POWER + 10 * f.form, { ult: true });
+  await attack(B.act, B.opp, ULT_POWER + 10 * f.form, { ult: true });
   await tween(B.fx, 'darken', 0, 300);
   await afterMyAction();
 }
@@ -755,7 +818,7 @@ async function enemyTurn() {
   if (active(B.me).fainted) {
     const left = aliveIdx(B.me);
     if (!left.length) { await lose(); return; }
-    await chooseNext(true);
+    await chooseNext(true, B.me);
   }
   playerTurn();
 }
@@ -771,30 +834,34 @@ function chooser(title, list, forced) {
       ${forced ? '' : '<div class="row"><button class="btn ghost" data-act="choose" data-i="-1">取消</button></div>'}`, forced);
   });
 }
-async function chooseNext(forced) {
-  const list = B.me.team.map((f, i) => ({ f, i, disabled: f.fainted || i === B.me.active, note: f.fainted ? '已倒下' : i === B.me.active ? '正在场上' : '' }));
-  const i = await chooser(forced ? '选择下一只宠物' : '换哪只宠物上场？（会用掉这一回合）', list, forced);
+async function chooseNext(forced, side = B.act) {
+  const list = side.team.map((f, i) => ({ f, i, disabled: f.fainted || i === side.active, note: f.fainted ? '已倒下' : i === side.active ? '正在场上' : '' }));
+  const who = B.pvp ? `${side.prof.avatar} ${esc(side.prof.name)}，` : '';
+  const i = await chooser(forced ? `${who}选择下一只宠物` : `${who}换哪只宠物上场？（会用掉这一回合）`, list, forced);
   closeModal();
   if (i < 0) return false;
-  const old = active(B.me);
+  const old = active(side);
   if (!old.fainted) await tween(old.anim, 'enter', 0, 300);
-  B.me.active = i;
-  await enter(B.me);
-  setMsg(`上吧，${active(B.me).name}！`);
+  side.active = i;
+  await enter(side);
+  setMsg(`上吧，${active(side).name}！`);
   await sleep(400);
   return true;
 }
 async function doSwitch() {
   if (!B || B.busy || B.over) return;
-  if (aliveIdx(B.me).length < 2) { toast('没有别的宠物可以换了'); return; }
+  if (aliveIdx(B.act).length < 2) { toast('没有别的宠物可以换了'); return; }
   B.busy = true; renderBattle();
-  if (await chooseNext(false)) await enemyTurn();
+  if (await chooseNext(false, B.act)) {
+    if (B.pvp) { [B.act, B.opp] = [B.opp, B.act]; playerTurn(); } else await enemyTurn();
+  }
   else { B.busy = false; renderBattle(); }
 }
 
 // ---------- 道具 ----------
 async function openItems() {
   if (!B || B.busy || B.over) return;
+  if (B.pvp) { toast('双人对战不能用道具'); return; }
   if (B.me.items >= BATTLE_ITEM_LIMIT) { toast(`每场最多用 ${BATTLE_ITEM_LIMIT} 个道具`); return; }
   const ids = Object.keys(ITEMS).filter(id => ITEMS[id].battle);
   B.busy = true; renderBattle();
@@ -832,16 +899,20 @@ async function openItems() {
 
 // ================= 答题 =================
 let Qs = null;
-function askQuestion(sub, diff, { tag, kind }) {
+function askQuestion(sub, diff, { tag, kind, q: given }) {
   return new Promise(resolve => {
-    const grade = sub === 'zh' ? P.gradeZh : P.gradeMath;
-    const q = Quiz.make(sub, grade, diff);
-    const sec = kind === 'defense' ? Math.max(8, Math.round(timerSec() * 0.6)) : timerSec();
+    // 双人对战时按正在出招的玩家的年级出题
+    const prof = (B && screen === 'battle' && !B.over && B.act && B.act.prof) || P;
+    const grade = sub === 'zh' ? prof.gradeZh : prof.gradeMath;
+    const q = given || Quiz.make(sub, grade, diff);
+    if (!q.sub) q.sub = sub;
+    const base = (TIMERS.find(t => t.id === prof.settings.timer) || TIMERS[1]).sec;
+    const sec = kind === 'defense' ? Math.max(8, Math.round(base * 0.6)) : base;
     const critWin = Math.min(sec * 0.4, 9);
-    Qs = { q, sec, critWin, start: performance.now(), done: false, resolve, kind, ticks: 0 };
+    Qs = { q, sec, critWin, start: performance.now(), done: false, resolve, kind, ticks: 0, prof, fromMistake: !!given };
     $('#qTag').innerHTML = tag;
     $('#qBody').innerHTML = q.html;
-    const showPy = sub === 'zh' && P.settings.pinyin;
+    const showPy = q.sub === 'zh' && prof.settings.pinyin;
     $('#qOpts').innerHTML = q.opts.map((o, i) => `<button class="opt" data-act="answer" data-i="${i}"><span class="k">${i + 1}</span>${esc(o.t)}${showPy && o.py ? `<small>${o.py}</small>` : ''}</button>`).join('');
     $('#qFeed').innerHTML = kind === 'hatch' || kind === 'evolve' ? '' : `<small>⚡ ${Math.round(critWin)} 秒内答对 = ${kind === 'defense' ? '完美闪避' : kind === 'support' ? '效果更好' : '暴击'}</small>`;
     $('#qsheet').classList.add('show');
@@ -870,16 +941,18 @@ async function answer(i) {
   const used = (performance.now() - S.start) / 1000;
   const correct = i === S.q.ans, fast = correct && used <= S.critWin;
   $$('#qOpts .opt').forEach((b, k) => { b.disabled = true; if (k === S.q.ans) b.classList.add('right'); else if (k === i) b.classList.add('wrong'); });
-  const inBattle = !!(B && screen === 'battle');
-  if (inBattle) B.stats.q++;
-  P.stats.q++;
+  const inBattle = !!(B && screen === 'battle' && !B.over);
+  const prof = S.prof || P, side = inBattle ? B.act : null;
+  if (side) side.stats.q++;
+  prof.stats.q++;
   if (correct) {
-    P.stats.right++;
-    if (inBattle) {
-      B.stats.right++; if (fast) B.stats.crit++;
-      B.me.rage = Math.min(3, B.me.rage + 1);
-      B.coins += 3;
-      const me = active(B.me); if (me.uid) B.exp[me.uid] = (B.exp[me.uid] || 0) + 2;
+    prof.stats.right++;
+    HOOKS.track('right', 1, prof); HOOKS.track(S.q.sub === 'math' ? 'math' : 'zh', 1, prof);
+    if (side) {
+      side.stats.right++; if (fast && S.kind === 'attack') { side.stats.crit++; HOOKS.track('crit', 1, prof); }
+      side.rage = Math.min(3, side.rage + 1);
+      side.coins += 3;
+      const me = active(side); if (me.uid) B.exp[me.uid] = (B.exp[me.uid] || 0) + 2;
     }
     sfx('right'); sfx('coin');
     const word = !inBattle ? (fast ? '⚡ 又快又对！' : '✅ 答对了！') : fast ? (S.kind === 'defense' ? '⚡ 完美闪避！' : S.kind === 'support' ? '⚡ 超快！效果加强！' : '⚡ 暴击！') : (S.kind === 'defense' ? '✅ 答对了！伤害减半' : '✅ 答对了！');
@@ -887,7 +960,8 @@ async function answer(i) {
     $('#qFeed').innerHTML = `<div class="big ${fast ? 'crit' : 'ok'}">${word}</div><small>${sub}</small>`;
     await sleep(fast ? 900 : 750);
   } else {
-    if (inBattle) B.me.rage = 0;
+    if (side) side.rage = 0;
+    if (!S.fromMistake) HOOKS.mistake(prof, S.q);   // 记进错题本
     sfx('wrong');
     const right = S.q.opts[S.q.ans].t;
     $('#qFeed').innerHTML = `<div class="big no">${i < 0 ? '⏰ 时间到！' : '❌ 答错了'}</div>
@@ -899,7 +973,7 @@ async function answer(i) {
   }
   $('#qsheet').classList.remove('show');
   save();
-  if (inBattle) renderBattle();
+  if (B && screen === 'battle') renderBattle();
   await sleep(250);
   S.resolve({ correct, fast });
 }
@@ -907,17 +981,24 @@ async function answer(i) {
 // ================= 胜负 =================
 async function win() {
   B.over = true; B.busy = true;
-  const st = B.stage, first = B.first;
+  const st = B.stage, first = B.first, story = B.mode === 'story';
   const acc = B.stats.q ? B.stats.right / B.stats.q : 1;
   const stars = acc >= 0.9 ? 3 : acc >= 0.7 ? 2 : 1;
-  const coinBonus = first ? st.coins : Math.round(st.coins / 3);
+  const coinBonus = story ? (first ? st.coins : Math.round(st.coins / 3)) : st.coins;
   const foeLv = B.foe.team.reduce((a, f) => a + f.lv, 0);
-  const baseExp = Math.round(foeLv * (first ? 4 : 2.5));
-  P.coins += B.coins + coinBonus;
-  P.stages[st.id] = Math.max(P.stages[st.id] || 0, stars);
+  const baseExp = Math.round(foeLv * (first ? 4 : 2.5) * (B.mode === 'mistake' ? 2 : 1));
+  const answerCoins = B.me.coins * (B.mode === 'mistake' ? 2 : 1);
+  P.coins += answerCoins + coinBonus;
+  if (story) P.stages[st.id] = Math.max(P.stages[st.id] || 0, stars);
+  HOOKS.track('win', 1, P);
   const gains = B.me.team.map(f => { const pet = petByUid(f.uid); const n = baseExp + (B.exp[f.uid] || 0); return { pet, n, ...giveExp(pet, n) }; });
-  const extra = [];
+  const extra = story ? [] : HOOKS.ladderResult(true);
   let joined = null;
+  if (B.mode === 'mistake') { HOOKS.track('mistake', 1, P); extra.push('👾 错题怪兽被打败了！奖励翻倍'); }
+  if (first && st.boss) {   // 解锁下一个区域
+    const ri = REGIONS.findIndex(r => r.stages.includes(st));
+    if (REGIONS[ri + 1]) extra.push(`🔓 解锁新区域：${REGIONS[ri + 1].icon} ${REGIONS[ri + 1].name}`);
+  }
   if (first) {
     if (st.reward) for (const k in st.reward) { giveReward(k, st.reward[k]); extra.push(rewardText(k, st.reward[k])); }
     if (st.badge && !P.badges.includes(st.badge)) { P.badges.push(st.badge); extra.push(st.badge); }
@@ -935,30 +1016,34 @@ async function win() {
   save();
   sfx('win'); speak('胜利！');
   await sleep(400);
-  modal(`<div class="result"><h2>🏆 胜利！</h2>
-    <div class="stars">${[0, 1, 2].map(k => `<span class="${k < stars ? '' : 'off'}" style="animation-delay:${0.2 + k * 0.25}s">⭐</span>`).join('')}</div>
-    <p>答对 <b>${B.stats.right} / ${B.stats.q}</b> 题${B.stats.crit ? ` · 暴击 ${B.stats.crit} 次` : ''}<br><small>正确率 90% 以上 3 星，70% 以上 2 星</small></p>
-    <p><b>🪙 +${B.coins + coinBonus}</b>（答题 ${B.coins} + 胜利 ${coinBonus}）${extra.length ? '<br>' + extra.join(' · ') : ''}</p>
+  const champ = first && st.final;
+  if (champ) setTimeout(() => { sfx('join'); speak('恭喜你成为宠物学院的冠军！'); }, 1200);
+  modal(`<div class="result"><h2>${champ ? '👑 学院冠军！' : '🏆 胜利！'}</h2>
+    ${story ? `<div class="stars">${[0, 1, 2].map(k => `<span class="${k < stars ? '' : 'off'}" style="animation-delay:${0.2 + k * 0.25}s">⭐</span>`).join('')}</div>` : ''}
+    ${champ ? '<p class="champ">你打败了院长，成为宠物学院大乱斗的冠军！<br>以后可以继续在天梯赛里挑战，也可以重打关卡拿更多星星。</p>' : ''}
+    <p>答对 <b>${B.stats.right} / ${B.stats.q}</b> 题${B.stats.crit ? ` · 暴击 ${B.stats.crit} 次` : ''}${story ? '<br><small>正确率 90% 以上 3 星，70% 以上 2 星</small>' : ''}</p>
+    <p><b>🪙 +${answerCoins + coinBonus}</b>（答题 ${answerCoins} + 胜利 ${coinBonus}）${extra.length ? '<br>' + extra.join(' · ') : ''}</p>
     <div class="gains">${gains.map(g => `<div class="gain"><img src="${petImg(g.pet.sp, 64, g.pet.form)}" width="40" height="40" alt="">
       <span>${petName(g.pet)}<br><small>+${g.n} 经验</small></span>
       <div class="expbar"><i style="width:${g.pet.lv >= MAX_LEVEL ? 100 : g.pet.exp / expNeed(g.pet.lv) * 100}%"></i></div>
       <span class="${g.to > g.from ? 'lvup' : ''}">${g.to > g.from ? `升级！Lv.${g.to}` : `Lv.${g.to}`}</span></div>`).join('')}</div>
     ${gains.some(g => g.to >= EVOLVE_LV[g.pet.form] && g.pet.form < 2) ? '<p class="hint">✨ 有宠物可以进化了！去「我的宠物」看看</p>' : ''}
-    <div class="row"><button class="btn ghost" data-act="again">再打一次</button><button class="btn" data-act="toMap">${joined ? '🎁 看看谁来了' : '回到地图'}</button></div></div>`, true);
+    <div class="row"><button class="btn ghost" data-act="again">${story ? '再打一次' : '再来一场'}</button><button class="btn" data-act="toMap">${joined ? '🎁 看看谁来了' : story ? '回到地图' : '返回对战中心'}</button></div></div>`, true);
   if (gains.some(g => g.to > g.from)) setTimeout(() => sfx('levelup'), 900);
   B.joined = joined;
 }
 async function lose() {
   B.over = true; B.busy = true;
   const gains = B.me.team.map(f => { const pet = petByUid(f.uid); const n = Math.round((B.exp[f.uid] || 0) + B.foe.team.reduce((a, x) => a + x.lv, 0) * 2); return { pet, n, ...giveExp(pet, n) }; });
-  P.coins += B.coins;
+  P.coins += B.me.coins;
+  const extra = B.mode === 'story' ? [] : HOOKS.ladderResult(false);
   save();
   sfx('lose');
   modal(`<div class="result"><h2>😿 这次输了…</h2>
-    <p>答对 <b>${B.stats.right} / ${B.stats.q}</b> 题 · 🪙 +${B.coins}</p>
+    <p>答对 <b>${B.stats.right} / ${B.stats.q}</b> 题 · 🪙 +${B.me.coins}${extra.length ? '<br>' + extra.join(' · ') : ''}</p>
     <div class="gains">${gains.map(g => `<div class="gain"><img src="${petImg(g.pet.sp, 64, g.pet.form)}" width="40" height="40" alt=""><span>${petName(g.pet)} +${g.n} 经验</span><span class="${g.to > g.from ? 'lvup' : ''}">Lv.${g.to}</span></div>`).join('')}</div>
     <p class="hint">💡 小提示：用克制对手的属性（🔥克🌿，🌿克⚡，⚡克💧，💧克🔥）、在商店买回血药水，或者先打前面的关卡让宠物升级。</p>
-    <div class="row"><button class="btn ghost" data-act="toMap">回到地图</button><button class="btn" data-act="again">再试一次</button></div></div>`, true);
+    <div class="row"><button class="btn ghost" data-act="toMap">${B.mode === 'story' ? '回到地图' : '返回对战中心'}</button><button class="btn" data-act="again">再试一次</button></div></div>`, true);
 }
 function showJoin(pet) {
   const d = PETS[pet.sp];
@@ -1039,9 +1124,9 @@ document.addEventListener('click', e => {
       modal(`<h2>要退出这场对战吗？</h2><p>退出不会得到奖励。</p><div class="row"><button class="btn ghost" data-act="closeModal">继续打</button><button class="btn red" data-act="reallyQuit">退出</button></div>`);
       break;
     default: if (ACTIONS[a]) ACTIONS[a](d, t); break;
-    case 'reallyQuit': B.over = true; closeModal(); B = null; go('map'); break;
-    case 'again': { const i = B.stageIdx; closeModal(); B = null; openTeamPick(i); break; }
-    case 'toMap': { const j = B && B.joined; closeModal(); B = null; if (j) { screen = 'map'; go('map'); showJoin(j); } else go('map'); break; }
+    case 'reallyQuit': { const story = B.mode === 'story'; B.over = true; closeModal(); B = null; go(story ? 'map' : 'arena'); break; }
+    case 'again': { const st = B.stage, i = B.stageIdx, story = B.mode === 'story'; closeModal(); B = null; if (story) openTeamPick(i); else st.again(); break; }
+    case 'toMap': { const j = B && B.joined, story = !B || B.mode === 'story'; closeModal(); B = null; if (j) { screen = 'map'; go('map'); showJoin(j); } else go(story ? 'map' : 'arena'); break; }
   }
 });
 // 答题时可以用键盘 1-4
@@ -1058,7 +1143,7 @@ window.addEventListener('resize', () => { if (screen === 'map') drawRoad(); });
 
 // 调试 / 自动测试用
 window.__pets = {
-  get B() { return B; }, get P() { return P; }, get Q() { return Qs; }, set P(v) { P = v; }, get store() { return store; }, get screen() { return screen; },
+  get B() { return B; }, get P() { return P; }, get Q() { return Qs; }, set P(v) { P = v; }, set B(v) { B = v; }, get store() { return store; }, get screen() { return screen; },
   set speed(v) { SPEED = v; }, auto: null, autoFast: null, go, startBattle, makeFighter, calcDamage, giveExp,
   setRegion(i) { mapRegion = i; },
 };

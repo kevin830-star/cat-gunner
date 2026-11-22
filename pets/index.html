@@ -55,6 +55,7 @@
     </div>
     <div class="menu">
       <button class="mbtn adv" data-go="map"><b>🗺️</b><span>冒险地图</span><small>挑战擂台主</small></button>
+      <button class="mbtn arena" data-go="arena"><b>⚔️</b><span>对战中心</span><small id="homeArena">天梯 · 双人 · 错题怪兽</small></button>
       <button class="mbtn pets" data-go="pets"><b>🐾</b><span>我的宠物</span><small id="homePetCount"></small></button>
       <button class="mbtn eggs" data-go="eggs"><b>🥚</b><span>孵蛋屋</span><small id="homeEggCount"></small></button>
       <button class="mbtn shop" data-go="shop"><b>🏪</b><span>道具商店</span><small>药水 · 糖果</small></button>
@@ -84,6 +85,12 @@
     <div id="dex" class="dex"></div>
     <h3 class="sect">全部宠物 <span id="petCount"></span></h3>
     <div id="petGrid" class="petgrid"></div>
+  </section>
+
+  <!-- 对战中心 -->
+  <section class="screen" id="s-arena">
+    <div class="topbar"><button class="back" data-go="home">‹</button><h2>对战中心</h2><div class="coins" data-coins></div></div>
+    <div id="arenaBody" class="arena-list"></div>
   </section>
 
   <!-- 孵蛋屋 -->
@@ -164,5 +171,6 @@
 <script src="art.js"></script>
 <script src="game.js"></script>
 <script src="grow.js"></script>
+<script src="arena.js"></script>
 </body>
 </html>

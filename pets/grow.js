@@ -193,6 +193,7 @@ ACTIONS.hatchGo = async () => {
     await sleep(500);
   }
   // 破壳
+  HOOKS.track('hatch', 1, P);
   const got = rollPet(H.kind);
   H.rarity = got.rar; H.phase = 'burst'; H.t0 = performance.now() / 1000;
   setHatchUI('……', crackDots(HATCH_NEED), '');

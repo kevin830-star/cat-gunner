@@ -26,9 +26,10 @@ const PetArt = (() => {
 
   // ---------- 颜色混合（受击闪白、倒下变灰） ----------
   const hex = c => { const n = parseInt(c.slice(1), 16); return [n >> 16 & 255, n >> 8 & 255, n & 255]; };
-  function mix(c, white, gray) {
-    if (!white && !gray) return c;
+  function mix(c, white, gray, tint) {
+    if (!white && !gray && !tint) return c;
     let [r, g, b] = hex(c);
+    if (tint) { const [tr, tg, tb] = hex(tint); r += (tr - r) * 0.5; g += (tg - g) * 0.5; b += (tb - b) * 0.5; }
     if (gray) { const v = (r + g + b) / 3; r += (v - r) * gray; g += (v - g) * gray; b += (v - b) * gray; }
     if (white) { r += (255 - r) * white; g += (255 - g) * white; b += (255 - b) * white; }
     return `rgb(${r | 0},${g | 0},${b | 0})`;
@@ -36,7 +37,7 @@ const PetArt = (() => {
 
   function draw(ctx, look, x, y, size, t = 0, o = {}) {
     const L = LOOKS[look] || LOOKS.huowei;
-    const C = c => mix(c, o.white || 0, (o.faint || 0) * 0.7);
+    const C = c => mix(c, o.white || 0, (o.faint || 0) * 0.7, o.tint);
     const LW = 3.2;
     const s = size / 100;
     ctx.save();
